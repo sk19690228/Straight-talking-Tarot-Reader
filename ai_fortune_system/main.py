@@ -5,7 +5,6 @@ import os
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from dotenv import load_dotenv
-
 from generator import ContentGenerator, GeneratorError
 from image_processor import ImageProcessorError, compose_fortune_image
 from publisher import SNSPublisher

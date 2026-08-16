@@ -81,7 +81,7 @@ class ContentGenerator:
             if missing:
                 raise GeneratorError(f"生成結果に必須キーが不足しています: {missing}")
             return content
-        except (GeneratorError,):
+        except GeneratorError:
             raise
         except Exception as exc:
             logger.exception("文章生成中にエラーが発生しました")

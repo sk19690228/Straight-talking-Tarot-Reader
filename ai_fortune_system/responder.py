@@ -13,8 +13,10 @@ STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DAILY_STATE_PATH = os.path.join(STATE_DIR, "daily_fortune.json")
 SINCE_ID_PATH = os.path.join(STATE_DIR, "since_id.json")
 
-# 全角/半角・大文字小文字を問わず「A」「B」単体の返信のみを回答として扱う
-ANSWER_PATTERN = re.compile(r"^\s*[@＠]?\S*\s*([AaＡａ]|[BbＢｂ])\s*$")
+# 全角/半角・大文字小文字を問わず「A」「B」単体の返信のみを回答として扱う。
+# Xはリプライ時に "@元ツイート主 " を本文の先頭に自動付与するため、
+# 先頭の@メンション（複数可）は許容しつつ、それ以外の文字が混じる場合は除外する。
+ANSWER_PATTERN = re.compile(r"^\s*(?:[@＠][^\s@＠]+\s+)*([AaＡａ]|[BbＢｂ])\s*$")
 
 
 class ResponderError(Exception):
