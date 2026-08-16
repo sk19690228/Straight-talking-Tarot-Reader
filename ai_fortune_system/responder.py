@@ -38,6 +38,16 @@ def save_daily_state(tweet_id: str, content: dict, theme: str) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def update_tweet_id(tweet_id: str) -> None:
+    """手動でXに投稿した後、そのツイートIDを本日の鑑定データに登録する。"""
+    daily_state = _load_json(DAILY_STATE_PATH)
+    if not daily_state:
+        raise ResponderError("本日の鑑定データが見つかりません。先にコンテンツを生成してください。")
+    daily_state["tweet_id"] = tweet_id
+    with open(DAILY_STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(daily_state, f, ensure_ascii=False, indent=2)
+
+
 def _load_json(path: str) -> dict | None:
     if not os.path.exists(path):
         return None
@@ -72,6 +82,12 @@ class ReplyResponder:
         daily_state = _load_json(DAILY_STATE_PATH)
         if not daily_state:
             logger.info("本日の鑑定データが未登録のため、リプライ確認をスキップします。")
+            return
+        if not daily_state.get("tweet_id"):
+            logger.info(
+                "本日のツイートIDが未登録のため、リプライ確認をスキップします。"
+                "手動投稿後に register_tweet_id.py でツイートIDを登録してください。"
+            )
             return
 
         since_id = (_load_json(SINCE_ID_PATH) or {}).get("since_id")

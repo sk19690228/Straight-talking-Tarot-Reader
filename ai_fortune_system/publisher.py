@@ -120,13 +120,19 @@ class SNSPublisher:
             return None
 
     # ------------------------------------------------------------------
-    def publish_all(self, image_path: str, text: str) -> dict:
-        """X・Instagram・Threadsへ順に配信する。1プラットフォームの失敗が他へ波及しないようにする。"""
+    def publish_all(self, image_path: str, text: str, post_to_x: bool = True) -> dict:
+        """X・Instagram・Threadsへ順に配信する。1プラットフォームの失敗が他へ波及しないようにする。
+
+        post_to_x=Falseの場合、Xへの自動投稿はスキップする（手動投稿運用向け）。
+        """
         image_filename = os.path.basename(image_path)
         results = {}
 
-        results["x_tweet_id"] = self.post_to_x(image_path, text)
-        time.sleep(PUBLISH_INTERVAL_SECONDS)
+        if post_to_x:
+            results["x_tweet_id"] = self.post_to_x(image_path, text)
+            time.sleep(PUBLISH_INTERVAL_SECONDS)
+        else:
+            results["x_tweet_id"] = None
 
         results["instagram_media_id"] = self.post_to_instagram(image_filename, text)
         time.sleep(PUBLISH_INTERVAL_SECONDS)

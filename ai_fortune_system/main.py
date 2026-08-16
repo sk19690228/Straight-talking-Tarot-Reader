@@ -5,6 +5,7 @@ import os
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from dotenv import load_dotenv
+
 from generator import ContentGenerator, GeneratorError
 from image_processor import ImageProcessorError, compose_fortune_image
 from publisher import SNSPublisher
@@ -34,14 +35,23 @@ def run_daily_fortune_job() -> None:
         background_path = generator.generate_background_image(theme, OUTPUT_DIR)
         image_path = compose_fortune_image(background_path, content["catchphrase"], OUTPUT_DIR)
 
-        results = SNSPublisher().publish_all(image_path, content["sns_text"])
+        auto_post_to_x = os.getenv("AUTO_POST_TO_X", "true").lower() == "true"
+        results = SNSPublisher().publish_all(image_path, content["sns_text"], post_to_x=auto_post_to_x)
         logger.info("配信結果: %s", results)
 
-        tweet_id = results.get("x_tweet_id")
-        if tweet_id:
-            save_daily_state(tweet_id, content, theme)
-        else:
-            logger.warning("Xへの投稿に失敗したため、リプライ自動応答用の状態を更新できません。")
+        # tweet_idがNone（手動投稿モード、またはX投稿失敗）でも、選択肢A/Bの
+        # 鑑定結果はここで保存しておく。手動投稿後にregister_tweet_id.pyで
+        # ツイートIDだけ登録すれば、リプライ自動応答が有効になる。
+        save_daily_state(results.get("x_tweet_id"), content, theme)
+
+        if not auto_post_to_x:
+            logger.info("=== Xへ手動投稿してください ===")
+            logger.info("画像: %s", image_path)
+            logger.info("投稿文:\n%s", content["sns_text"])
+            logger.info("投稿後は次のコマンドでツイートIDを登録してください:")
+            logger.info("  python3 register_tweet_id.py <ツイートID>")
+        elif not results.get("x_tweet_id"):
+            logger.warning("Xへの自動投稿に失敗しました。リプライ自動応答は無効のままです。")
     except (GeneratorError, ImageProcessorError):
         logger.exception("コンテンツ生成中にエラーが発生したため、本日のジョブを中止します。")
     except Exception:
