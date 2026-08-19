@@ -1,0 +1,41 @@
+name: Register Tweet ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      tweet_id:
+        description: '手動投稿したツイートのID'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ai_fortune_system
+        run: pip install -r requirements.txt
+
+      - name: Register tweet ID
+        working-directory: ai_fortune_system
+        run: python register_tweet_id.py "${{ inputs.tweet_id }}"
+
+      - name: Commit updated state
+        working-directory: ai_fortune_system
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet && exit 0
+          git commit -m "Register tweet id [skip ci]"
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push

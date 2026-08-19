@@ -1,0 +1,56 @@
+name: Daily Fortune Post
+
+on:
+  schedule:
+    - cron: '0 23 * * *' # 08:00 JST
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Japanese font
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+
+      - name: Install dependencies
+        working-directory: ai_fortune_system
+        run: pip install -r requirements.txt
+
+      - name: Generate and publish today's fortune
+        working-directory: ai_fortune_system
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          AUTO_POST_TO_X: 'false'
+        run: python -c "from main import run_daily_fortune_job; run_daily_fortune_job()"
+
+      - name: Upload generated image for manual posting
+        uses: actions/upload-artifact@v4
+        with:
+          name: fortune-image-${{ github.run_id }}
+          path: ai_fortune_system/output/*.png
+          retention-days: 7
+
+      - name: Commit updated state
+        working-directory: ai_fortune_system
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet && exit 0
+          git commit -m "Update daily fortune state [skip ci]"
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push

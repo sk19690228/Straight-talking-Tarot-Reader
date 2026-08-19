@@ -2,5 +2,4 @@ __pycache__/
 *.pyc
 .env
 ai_fortune_system/output/
-ai_fortune_system/state/
 .DS_Store

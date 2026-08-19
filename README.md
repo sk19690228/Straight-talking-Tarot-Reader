@@ -18,7 +18,51 @@ ai_fortune_system/
 └── requirements.txt
 ```
 
-## セットアップ
+## GitHub Actionsで動かす（推奨・常時稼働）
+
+サーバー契約なしで、GitHub Actionsの無料枠だけで常時運用できます。ローカルでの
+Python環境構築は不要です。
+
+### 1. リポジトリにSecretsを登録
+
+GitHubのリポジトリで `Settings → Secrets and variables → Actions → New repository secret`
+から、以下を1つずつ登録してください（値はご自身のAPIキー）。
+
+- `OPENAI_API_KEY`
+- `X_API_KEY`
+- `X_API_SECRET`
+- `X_ACCESS_TOKEN`
+- `X_ACCESS_TOKEN_SECRET`
+- `X_BEARER_TOKEN`
+
+日本語フォントは、ワークフロー内で毎回 `apt-get install fonts-noto-cjk` により自動でインストールされるため、`fonts/` への配置は不要です。
+
+### 2. 3つのワークフロー
+
+- **`.github/workflows/daily-post.yml`**: 毎日08:00 JSTに自動実行。当日のコンテンツと
+  画像を生成します（`AUTO_POST_TO_X=false`固定のため、Xへの自動投稿はしません）。
+  生成された画像は、その実行の「Artifacts」からダウンロードできます。投稿文は
+  実行ログに出力されます。
+- **`.github/workflows/reply-check.yml`**: 15分おきに自動実行。登録済みのツイートへの
+  A/Bリプライを検知して自動返信します。ツイートID未登録の間は何もしません。
+- **`.github/workflows/register-tweet.yml`**: 手動投稿したツイートのIDを登録します。
+  GitHubの「Actions」タブ→「Register Tweet ID」→「Run workflow」から、ツイートIDを
+  入力して実行してください。
+
+いずれも `Actions` タブから「Run workflow」で今すぐ手動実行できます（スケジュールを
+待つ必要はありません）。
+
+### 3. 運用の流れ
+
+1. `daily-post`が自動実行 → Artifactsから画像をダウンロード、ログから投稿文をコピー
+2. 自分の手でXへ投稿
+3. `register-tweet`を手動実行し、投稿したツイートIDを入力
+4. 以降は`reply-check`が自動でA/Bリプライに返信
+
+状態（どのツイートを監視しているか、どこまで返信済みか）は`ai_fortune_system/state/`
+配下のJSONファイルとしてリポジトリに自動コミットされ、実行のたびに引き継がれます。
+
+## ローカルで動かす場合のセットアップ
 
 ```bash
 cd ai_fortune_system
