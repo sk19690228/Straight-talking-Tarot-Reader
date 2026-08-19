@@ -24,8 +24,18 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: a
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          ok=0
+          for i in 1 2; do
+            if timeout 60 sudo apt-get update -qq && timeout 120 sudo apt-get install -y --no-install-recommends fonts-noto-cjk; then
+              ok=1
+              break
+            fi
+            echo "::warning::apt-get attempt $i failed or timed out, retrying..."
+            sleep 5
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::warning::Could not install fonts-noto-cjk after retries; image compositing will fall back to a non-Japanese font."
+          fi
 
       - name: Install dependencies
         working-directory: ai_fortune_system
