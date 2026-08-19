@@ -1,18 +1,18 @@
 """OpenAI API連携モジュール — 辛口タロット占いの文章・画像生成を担当する。"""
 
+import base64
 import json
 import logging
 import os
 import random
 import uuid
 
-import requests
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
 TEXT_MODEL = "gpt-4o"
-IMAGE_MODEL = "dall-e-3"
+IMAGE_MODEL = "gpt-image-1"
 
 DAILY_THEMES = [
     "恋愛運",
@@ -88,7 +88,7 @@ class ContentGenerator:
             raise GeneratorError(str(exc)) from exc
 
     def generate_background_image(self, theme: str, output_dir: str) -> str:
-        """DALL-E 3で古びたタロットカード風の背景画像を生成し、ローカルに保存してパスを返す。"""
+        """gpt-image-1で古びたタロットカード風の背景画像を生成し、ローカルに保存してパスを返す。"""
         prompt = (
             "An ornate, aged antique tarot card background, mystical and vintage, "
             "sepia and deep purple tones, intricate border filigree, no text, no words, "
@@ -99,11 +99,9 @@ class ContentGenerator:
                 model=IMAGE_MODEL,
                 prompt=prompt,
                 size="1024x1024",
-                quality="standard",
                 n=1,
             )
-            image_url = response.data[0].url
-            image_bytes = requests.get(image_url, timeout=30).content
+            image_bytes = base64.b64decode(response.data[0].b64_json)
 
             os.makedirs(output_dir, exist_ok=True)
             output_path = os.path.join(output_dir, f"bg_{uuid.uuid4().hex}.png")
