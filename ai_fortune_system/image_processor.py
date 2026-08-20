@@ -65,17 +65,52 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFon
     return lines
 
 
-def compose_fortune_image(
-    background_path: str,
+def _resize_cover(img: Image.Image, target_size: tuple[int, int]) -> Image.Image:
+    """アスペクト比を保ったまま拡大し、target_sizeぴったりに中央でクロップする。"""
+    target_w, target_h = target_size
+    src_w, src_h = img.size
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w, new_h = round(src_w * scale), round(src_h * scale)
+    img = img.resize((new_w, new_h))
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
+def _draw_option_label(draw: ImageDraw.ImageDraw, text: str, center_x: int, top_y: int, font: ImageFont.FreeTypeFont) -> None:
+    """【A】【B】のようなラベルを、背景に関わらず見やすい黒バッジ付きで描画する。"""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = bbox[2] - bbox[0]
+    padding_x, padding_y = 24, 16
+    box_left = center_x - text_width // 2 - padding_x
+    box_right = center_x + text_width // 2 + padding_x
+    box_top = top_y
+    box_bottom = top_y + (bbox[3] - bbox[1]) + padding_y * 2
+    draw.rounded_rectangle([(box_left, box_top), (box_right, box_bottom)], radius=16, fill=(0, 0, 0))
+    draw.text((center_x - text_width // 2 - bbox[0], box_top + padding_y - bbox[1]), text, font=font, fill="white")
+
+
+def compose_dual_fortune_image(
+    image_a_path: str,
+    image_b_path: str,
     catchphrase: str,
     output_dir: str,
     font_path: str | None = None,
-    font_size: int = 72,
+    font_size: int = 64,
+    label_font_size: int = 90,
 ) -> str:
-    """背景画像にキャッチコピーをセンタリング＆折り返し描画し、鑑定書風画像を生成する。"""
+    """選択肢A(前向き)・B(厳しい現実)の2枚を左右に並べ、中央にキャッチコピー、
+    各半分の上部に【A】【B】ラベルを大きく配置した鑑定書風画像を生成する。"""
     try:
-        with Image.open(background_path) as bg:
-            canvas = bg.convert("RGB").resize(CANVAS_SIZE)
+        half_width = CANVAS_SIZE[0] // 2
+        with Image.open(image_a_path) as img_a:
+            left_half = _resize_cover(img_a.convert("RGB"), (half_width, CANVAS_SIZE[1]))
+        with Image.open(image_b_path) as img_b:
+            right_half = _resize_cover(img_b.convert("RGB"), (CANVAS_SIZE[0] - half_width, CANVAS_SIZE[1]))
+
+        canvas = Image.new("RGB", CANVAS_SIZE)
+        canvas.paste(left_half, (0, 0))
+        canvas.paste(right_half, (half_width, 0))
 
         overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
         overlay_draw = ImageDraw.Draw(overlay)
@@ -103,6 +138,11 @@ def compose_fortune_image(
             # 縁取りを付けて背景の濃淡に関わらず視認性を確保する
             draw.text((x, y), line, font=font, fill="white", stroke_width=3, stroke_fill="black")
             y += line_height + line_spacing
+
+        label_font = _load_font(font_path, label_font_size)
+        label_top_y = int(CANVAS_SIZE[1] * 0.06)
+        _draw_option_label(draw, "【A】", half_width // 2, label_top_y, label_font)
+        _draw_option_label(draw, "【B】", half_width + (CANVAS_SIZE[0] - half_width) // 2, label_top_y, label_font)
 
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"fortune_{uuid.uuid4().hex}.png")

@@ -15,14 +15,14 @@ TEXT_MODEL = "gpt-4o"
 IMAGE_MODEL = "gpt-image-1"
 
 DAILY_THEMES = [
-    "恋愛運",
-    "仕事運",
-    "人間関係",
-    "お金の悩み",
-    "結婚・将来設計",
-    "自分の性格",
-    "家族との関係",
-    "転職・キャリア",
+    "浮気疑惑のある恋人と、この先も一緒にいるべきか",
+    "元恋人への未練を断ち切れず、新しい恋に進めない",
+    "既婚者・恋人がいる相手を好きになってしまった",
+    "何年も遠距離恋愛を続けているが、将来が見えない",
+    "友達以上恋人未満の関係から、一歩踏み出すべきか",
+    "結婚を渋る恋人と、別れて次に進むべきか",
+    "音信不通になった相手を、まだ待つべきか",
+    "好きな人に告白すべきか、諦めるべきか",
 ]
 
 SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です。
@@ -31,12 +31,19 @@ SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です�
 ターゲット読者は30〜40代の女性です。人格否定はせず、あくまで「耳の痛いけど納得できる」
 辛口アドバイスに徹してください。
 
+このアカウントが扱うジャンルは「深い悩みのある恋愛」に固定されています。
+お金・仕事・家族などの相談は一切扱わず、必ず切実な恋愛の悩みを題材にしてください。
+
+選択肢A・Bは、対比がはっきり伝わるように以下の方針で作成してください。
+- 選択肢A: 前向き・希望を持てる側の選択（例: 一歩踏み出す、信じる、待つ）
+- 選択肢B: 厳しい現実を直視する側の選択（例: 見切りをつける、諦める、離れる）
+
 出力は必ず次のキーを持つJSONオブジェクトのみとします。
 - "catchphrase": 鑑定書の画像に載せる短いキャッチコピー（全角20文字以内、体言止め推奨）
 - "sns_text": SNS投稿本文（120文字以内、選択肢Aへのリプライは「A」、Bへのリプライは「B」と
   送るよう読者に促す一文を含める。絵文字は控えめに1〜2個まで）
-- "option_a_label": 選択肢Aの短い見出し（10文字以内）
-- "option_b_label": 選択肢Bの短い見出し（10文字以内）
+- "option_a_label": 選択肢Aの短い見出し（前向きな選択、10文字以内）
+- "option_b_label": 選択肢Bの短い見出し（厳しい現実を選ぶ側、10文字以内）
 - "option_a_result": 選択肢Aを選んだ人向けの辛口鑑定結果本文（150文字以内）
 - "option_b_result": 選択肢Bを選んだ人向けの辛口鑑定結果本文（150文字以内）
 """
@@ -87,27 +94,41 @@ class ContentGenerator:
             logger.exception("文章生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
-    def generate_background_image(self, theme: str, output_dir: str) -> str:
-        """gpt-image-1で古びたタロットカード風の背景画像を生成し、ローカルに保存してパスを返す。"""
-        prompt = (
-            "An ornate, aged antique tarot card background, mystical and vintage, "
-            "sepia and deep purple tones, intricate border filigree, no text, no words, "
-            f"evoking the theme of '{theme}', high detail illustration style"
+    def generate_option_images(self, theme: str, content: dict, output_dir: str) -> tuple[str, str]:
+        """選択肢A(前向き)・B(厳しい現実)を対比的に表すタロット風画像を2枚生成する。"""
+        option_a = content.get("option_a_label", theme)
+        option_b = content.get("option_b_label", theme)
+        prompt_a = (
+            "An ornate antique tarot card illustration symbolizing hope and a positive turn "
+            "in a deep romantic dilemma, warm golden and soft pink tones, blooming flowers, "
+            "gentle sunrise light, intricate vintage border filigree, no text, no words, "
+            f"mystical elegant illustration style, evoking: '{option_a}'"
+        )
+        prompt_b = (
+            "An ornate antique tarot card illustration symbolizing doubt and a harsh, sobering "
+            "turn in a deep romantic dilemma, cold dark blue and grey tones, wilting flowers and "
+            "storm clouds, somber moody lighting, intricate vintage border filigree, no text, "
+            f"no words, mystical elegant illustration style, evoking: '{option_b}'"
         )
         try:
-            response = self._client.images.generate(
-                model=IMAGE_MODEL,
-                prompt=prompt,
-                size="1024x1024",
-                n=1,
-            )
-            image_bytes = base64.b64decode(response.data[0].b64_json)
-
-            os.makedirs(output_dir, exist_ok=True)
-            output_path = os.path.join(output_dir, f"bg_{uuid.uuid4().hex}.png")
-            with open(output_path, "wb") as f:
-                f.write(image_bytes)
-            return output_path
+            path_a = self._generate_single_image(prompt_a, output_dir, "a")
+            path_b = self._generate_single_image(prompt_b, output_dir, "b")
+            return path_a, path_b
         except Exception as exc:
             logger.exception("画像生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
+
+    def _generate_single_image(self, prompt: str, output_dir: str, suffix: str) -> str:
+        response = self._client.images.generate(
+            model=IMAGE_MODEL,
+            prompt=prompt,
+            size="1024x1536",
+            n=1,
+        )
+        image_bytes = base64.b64decode(response.data[0].b64_json)
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"bg_{suffix}_{uuid.uuid4().hex}.png")
+        with open(output_path, "wb") as f:
+            f.write(image_bytes)
+        return output_path

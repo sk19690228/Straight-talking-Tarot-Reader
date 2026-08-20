@@ -7,7 +7,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from dotenv import load_dotenv
 
 from generator import ContentGenerator, GeneratorError
-from image_processor import ImageProcessorError, compose_fortune_image
+from image_processor import ImageProcessorError, compose_dual_fortune_image
 from publisher import SNSPublisher
 from responder import ReplyResponder, save_daily_state
 
@@ -32,8 +32,8 @@ def run_daily_fortune_job() -> None:
         logger.info("本日のテーマ: %s", theme)
 
         content = generator.generate_fortune_content(theme)
-        background_path = generator.generate_background_image(theme, OUTPUT_DIR)
-        image_path = compose_fortune_image(background_path, content["catchphrase"], OUTPUT_DIR)
+        image_a_path, image_b_path = generator.generate_option_images(theme, content, OUTPUT_DIR)
+        image_path = compose_dual_fortune_image(image_a_path, image_b_path, content["catchphrase"], OUTPUT_DIR)
 
         auto_post_to_x = os.getenv("AUTO_POST_TO_X", "true").lower() == "true"
         results = SNSPublisher().publish_all(image_path, content["sns_text"], post_to_x=auto_post_to_x)
