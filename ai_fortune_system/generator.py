@@ -39,7 +39,9 @@ SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です�
 - 選択肢B: 厳しい現実を直視する側の選択（例: 見切りをつける、諦める、離れる）
 
 出力は必ず次のキーを持つJSONオブジェクトのみとします。
-- "catchphrase": 鑑定書の画像に載せる短いキャッチコピー（全角20文字以内、体言止め推奨）
+- "catchphrase": 鑑定書の画像最上部に載せるキャッチコピー。「運命の分岐点」のような
+  抽象的な言い回しは避け、悩みの具体的な状況（相手との関係性、迷っている行動など）が
+  一目で伝わる、具体的な言い回しにする（全角28文字以内）
 - "sns_text": SNS投稿本文（120文字以内、選択肢Aへのリプライは「A」、Bへのリプライは「B」と
   送るよう読者に促す一文を含める。絵文字は控えめに1〜2個まで）
 - "option_a_label": 選択肢Aの短い見出し（前向きな選択、10文字以内）
@@ -99,16 +101,20 @@ class ContentGenerator:
         option_a = content.get("option_a_label", theme)
         option_b = content.get("option_b_label", theme)
         prompt_a = (
-            "An ornate antique tarot card illustration symbolizing hope and a positive turn "
-            "in a deep romantic dilemma, warm golden and soft pink tones, blooming flowers, "
-            "gentle sunrise light, intricate vintage border filigree, no text, no words, "
-            f"mystical elegant illustration style, evoking: '{option_a}'"
+            "The oldest style of hand-painted medieval tarot card, 15th-century illuminated "
+            "manuscript style like the earliest surviving tarot decks, aged gold leaf and "
+            "cracked parchment texture, faded pigments, symbolizing hope and a positive turn "
+            "in a deep romantic dilemma, warm faded gold and rose tones, blooming flowers, "
+            "radiant halo light, hand-drawn ornate medieval border, no text, no words, "
+            f"ancient mystical illustration, evoking: '{option_a}'"
         )
         prompt_b = (
-            "An ornate antique tarot card illustration symbolizing doubt and a harsh, sobering "
-            "turn in a deep romantic dilemma, cold dark blue and grey tones, wilting flowers and "
-            "storm clouds, somber moody lighting, intricate vintage border filigree, no text, "
-            f"no words, mystical elegant illustration style, evoking: '{option_b}'"
+            "The oldest style of hand-painted medieval tarot card, 15th-century illuminated "
+            "manuscript style like the earliest surviving tarot decks, aged gold leaf and "
+            "cracked parchment texture, faded pigments, symbolizing doubt and a harsh, sobering "
+            "turn in a deep romantic dilemma, faded indigo and ash-grey tones, wilting flowers, "
+            "stormy shadowed light, hand-drawn ornate medieval border, no text, no words, "
+            f"ancient mystical illustration, evoking: '{option_b}'"
         )
         try:
             path_a = self._generate_single_image(prompt_a, output_dir, "a")
