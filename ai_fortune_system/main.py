@@ -24,30 +24,50 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
 
 def run_daily_fortune_job() -> None:
-    """日替わりの辛口タロット占いコンテンツを生成し、全SNSへ配信する。"""
+    """日替わりの辛口タロット占いコンテンツ（Q1→Q2→最終診断の分岐一式）を
+    生成し、Q1をSNSへ配信する。Q2・最終診断はリプライ確認ジョブが自動投稿する。"""
     logger.info("日次コンテンツ生成ジョブを開始します。")
     try:
         generator = ContentGenerator()
         theme = generator.pick_daily_theme()
         logger.info("本日のテーマ: %s", theme)
 
-        content = generator.generate_fortune_content(theme)
-        image_a_path, image_b_path = generator.generate_option_images(theme, content, OUTPUT_DIR)
-        image_path = compose_dual_fortune_image(image_a_path, image_b_path, content["catchphrase"], OUTPUT_DIR)
+        content = generator.generate_branching_content(theme)
+        level1, level2_a, level2_b = content["level1"], content["level2_a"], content["level2_b"]
+
+        image_a_path, image_b_path = generator.generate_pair_images(
+            level1["option_a_label"], level1["option_b_label"], OUTPUT_DIR, "l1"
+        )
+        image_path = compose_dual_fortune_image(image_a_path, image_b_path, level1["catchphrase"], OUTPUT_DIR)
+
+        theta_path, delta_path = generator.generate_pair_images(
+            level2_a["option_theta_label"], level2_a["option_delta_label"], OUTPUT_DIR, "l2a"
+        )
+        level2_a_image_path = compose_dual_fortune_image(theta_path, delta_path, level2_a["catchphrase"], OUTPUT_DIR)
+
+        eta_path, phi_path = generator.generate_pair_images(
+            level2_b["option_eta_label"], level2_b["option_phi_label"], OUTPUT_DIR, "l2b"
+        )
+        level2_b_image_path = compose_dual_fortune_image(eta_path, phi_path, level2_b["catchphrase"], OUTPUT_DIR)
 
         auto_post_to_x = os.getenv("AUTO_POST_TO_X", "true").lower() == "true"
-        results = SNSPublisher().publish_all(image_path, content["sns_text"], post_to_x=auto_post_to_x)
+        results = SNSPublisher().publish_all(image_path, level1["question"], post_to_x=auto_post_to_x)
         logger.info("配信結果: %s", results)
 
-        # tweet_idがNone（手動投稿モード、またはX投稿失敗）でも、選択肢A/Bの
-        # 鑑定結果はここで保存しておく。手動投稿後にregister_tweet_id.pyで
-        # ツイートIDだけ登録すれば、リプライ自動応答が有効になる。
-        save_daily_state(results.get("x_tweet_id"), content, theme)
+        with open(level2_a_image_path, "rb") as f:
+            level2_a_image_bytes = f.read()
+        with open(level2_b_image_path, "rb") as f:
+            level2_b_image_bytes = f.read()
+
+        # tweet_idがNone（手動投稿モード、またはX投稿失敗）でも、Q1/Q2/最終診断一式は
+        # ここで保存しておく。手動投稿後にregister_tweet_id.pyでツイートIDだけ登録すれば、
+        # Q2以降のリプライ自動応答が有効になる。
+        save_daily_state(results.get("x_tweet_id"), content, theme, level2_a_image_bytes, level2_b_image_bytes)
 
         if not auto_post_to_x:
             logger.info("=== Xへ手動投稿してください ===")
             logger.info("画像: %s", image_path)
-            logger.info("投稿文:\n%s", content["sns_text"])
+            logger.info("投稿文:\n%s", level1["question"])
             logger.info("投稿後は次のコマンドでツイートIDを登録してください:")
             logger.info("  python3 register_tweet_id.py <ツイートID>")
         elif not results.get("x_tweet_id"):
