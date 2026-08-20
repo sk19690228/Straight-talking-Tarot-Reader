@@ -79,20 +79,23 @@ def _resize_cover(img: Image.Image, target_size: tuple[int, int]) -> Image.Image
     return img.crop((left, top, left + target_w, top + target_h))
 
 
-def _label_badge_height(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
-    bbox = draw.textbbox((0, 0), text, font=font)
-    return (bbox[3] - bbox[1]) + LABEL_PADDING_Y * 2
-
-
-def _draw_option_label(draw: ImageDraw.ImageDraw, text: str, center_x: int, top_y: int, font: ImageFont.FreeTypeFont) -> None:
-    """【A】【B】のようなラベルを、背景に関わらず見やすい黒バッジ付きで描画する。"""
+def _draw_option_label(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    center_x: int,
+    bottom_margin: int,
+    font: ImageFont.FreeTypeFont,
+    opacity: int,
+) -> None:
+    """Ａ／Ｂラベルを、本文と同じフォント・半透明の黒バッジ付きで最下部に描画する。"""
     bbox = draw.textbbox((0, 0), text, font=font)
     text_width = bbox[2] - bbox[0]
+    badge_height = (bbox[3] - bbox[1]) + LABEL_PADDING_Y * 2
+    box_bottom = CANVAS_SIZE[1] - bottom_margin
+    box_top = box_bottom - badge_height
     box_left = center_x - text_width // 2 - LABEL_PADDING_X
     box_right = center_x + text_width // 2 + LABEL_PADDING_X
-    box_top = top_y
-    box_bottom = top_y + (bbox[3] - bbox[1]) + LABEL_PADDING_Y * 2
-    draw.rounded_rectangle([(box_left, box_top), (box_right, box_bottom)], radius=16, fill=(0, 0, 0))
+    draw.rounded_rectangle([(box_left, box_top), (box_right, box_bottom)], radius=16, fill=(0, 0, 0, opacity))
     draw.text((center_x - text_width // 2 - bbox[0], box_top + LABEL_PADDING_Y - bbox[1]), text, font=font, fill="white")
 
 
@@ -103,10 +106,11 @@ def compose_dual_fortune_image(
     output_dir: str,
     font_path: str | None = None,
     font_size: int = 64,
-    label_font_size: int = 90,
+    label_opacity: int = 150,
 ) -> str:
     """選択肢A(前向き)・B(厳しい現実)の2枚を左右に並べ、最上部にキャッチコピー、
-    最下部の各半分に【A】【B】ラベルを大きく配置した鑑定書風画像を生成する。"""
+    最下部の各半分にＡ／Ｂラベル（本文と同じフォント、半透明バッジ）を配置した
+    鑑定書風画像を生成する。"""
     try:
         half_width = CANVAS_SIZE[0] // 2
         with Image.open(image_a_path) as img_a:
@@ -118,27 +122,21 @@ def compose_dual_fortune_image(
         canvas.paste(left_half, (0, 0))
         canvas.paste(right_half, (half_width, 0))
 
-        # キャッチコピー用の暗幕は最上部に配置する
-        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-        band_top = int(CANVAS_SIZE[1] * 0.02)
-        band_bottom = int(CANVAS_SIZE[1] * 0.26)
-        overlay_draw.rectangle(
-            [(0, band_top), (CANVAS_SIZE[0], band_bottom)],
-            fill=(10, 10, 20, OVERLAY_OPACITY),
-        )
-        canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
-
-        draw = ImageDraw.Draw(canvas)
         font = _load_font(font_path, font_size)
+        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        # キャッチコピー帯は最上部に配置する
         max_text_width = int(CANVAS_SIZE[0] * 0.82)
         lines = _wrap_text(draw, catchphrase, font, max_text_width)
-
         line_heights = [draw.textbbox((0, 0), line, font=font)[3] for line in lines]
         line_spacing = 16
         total_text_height = sum(line_heights) + line_spacing * (len(lines) - 1)
-        y = band_top + (band_bottom - band_top - total_text_height) // 2
+        band_top = int(CANVAS_SIZE[1] * 0.02)
+        band_bottom = int(CANVAS_SIZE[1] * 0.26)
+        draw.rectangle([(0, band_top), (CANVAS_SIZE[0], band_bottom)], fill=(10, 10, 20, OVERLAY_OPACITY))
 
+        y = band_top + (band_bottom - band_top - total_text_height) // 2
         for line, line_height in zip(lines, line_heights):
             line_width = draw.textbbox((0, 0), line, font=font)[2]
             x = (CANVAS_SIZE[0] - line_width) // 2
@@ -146,13 +144,12 @@ def compose_dual_fortune_image(
             draw.text((x, y), line, font=font, fill="white", stroke_width=3, stroke_fill="black")
             y += line_height + line_spacing
 
-        # 【A】【B】ラベルは最下部に配置する
-        label_font = _load_font(font_path, label_font_size)
-        badge_height = _label_badge_height(draw, "【A】", label_font)
+        # Ａ／Ｂラベルは最下部に配置する
         bottom_margin = int(CANVAS_SIZE[1] * 0.04)
-        label_top_y = CANVAS_SIZE[1] - bottom_margin - badge_height
-        _draw_option_label(draw, "【A】", half_width // 2, label_top_y, label_font)
-        _draw_option_label(draw, "【B】", half_width + (CANVAS_SIZE[0] - half_width) // 2, label_top_y, label_font)
+        _draw_option_label(draw, "Ａ", half_width // 2, bottom_margin, font, label_opacity)
+        _draw_option_label(draw, "Ｂ", half_width + (CANVAS_SIZE[0] - half_width) // 2, bottom_margin, font, label_opacity)
+
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
 
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"fortune_{uuid.uuid4().hex}.png")
