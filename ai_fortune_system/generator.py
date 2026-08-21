@@ -14,12 +14,13 @@ import json
 import logging
 import os
 import random
+import re
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-TEXT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+TEXT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_ENDPOINT_TEMPLATE = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -128,12 +129,13 @@ class ContentGenerator:
         try:
             try:
                 content = self._call_gemini(TEXT_MODEL, theme)
-            except _ModelNotFoundError:
+            except _ModelNotFoundError as exc:
                 # Geminiのモデル名は時間の経過で変わることがある(実際に
-                # gemini-2.0-flashが404になるケースを確認済み)ため、
-                # 404の場合はAPI側から現在利用可能なモデル一覧を取得し、
-                # generateContent対応の最新モデルへ自動フォールバックする。
-                fallback_model = self._discover_fallback_model()
+                # gemini-2.0-flashが404になるケースを確認済み)。404のエラー
+                # メッセージ自体に後継モデル名(例: "use models/gemini-3.6-flash")
+                # が含まれていることが多いのでまずそれを使い、含まれていない
+                # 場合のみモデル一覧からプレビュー版を避けて自動選定する。
+                fallback_model = self._extract_suggested_model(str(exc)) or self._discover_fallback_model()
                 logger.warning(
                     "モデル '%s' が見つからなかったため、'%s' にフォールバックします。",
                     TEXT_MODEL,
@@ -168,6 +170,14 @@ class ContentGenerator:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         return json.loads(text)
 
+    @staticmethod
+    def _extract_suggested_model(error_text: str) -> str | None:
+        """404エラーメッセージ中の "models/xxx" への言及から、後継モデル名を推測する。
+        通常「models/(無効になった名前)」と「models/(後継モデル名)」の2箇所が
+        現れるため、2箇所目を後継モデルとみなす(1箇所しかない場合は判断しない)。"""
+        matches = re.findall(r"models/([A-Za-z0-9][\w.\-]*)", error_text)
+        return matches[-1] if len(matches) >= 2 else None
+
     def _discover_fallback_model(self) -> str:
         response = requests.get(
             "https://generativelanguage.googleapis.com/v1beta/models",
@@ -176,22 +186,21 @@ class ContentGenerator:
         )
         response.raise_for_status()
         models = response.json().get("models", [])
-        candidates = [
+        all_candidates = [
             m["name"].removeprefix("models/")
             for m in models
             if "generateContent" in m.get("supportedGenerationMethods", [])
-            and "flash" in m.get("name", "")
         ]
-        if not candidates:
-            candidates = [
-                m["name"].removeprefix("models/")
-                for m in models
-                if "generateContent" in m.get("supportedGenerationMethods", [])
-            ]
-        if not candidates:
+        if not all_candidates:
             raise GeneratorError("generateContentに対応するGeminiモデルが見つかりませんでした。")
-        candidates.sort(reverse=True)
-        return candidates[0]
+
+        # preview/exp系はレート制限が厳しく不安定なことが多いので、安定版を優先する。
+        unstable_tags = ("preview", "exp", "experimental")
+        stable_candidates = [c for c in all_candidates if not any(tag in c for tag in unstable_tags)]
+        pool = stable_candidates or all_candidates
+        flash_pool = [c for c in pool if "flash" in c] or pool
+        flash_pool.sort(reverse=True)
+        return flash_pool[0]
 
     @staticmethod
     def _validate_branching_content(content: dict) -> None:
