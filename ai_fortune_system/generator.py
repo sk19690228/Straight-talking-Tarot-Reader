@@ -109,6 +109,10 @@ class GeneratorError(Exception):
     """コンテンツ生成処理に関するエラー。"""
 
 
+class _ModelNotFoundError(Exception):
+    """指定したGeminiモデル名がAPI側に存在しない(404)場合の内部例外。"""
+
+
 class ContentGenerator:
     def __init__(self, api_key: str | None = None):
         self._api_key = api_key or os.getenv("GEMINI_API_KEY")
@@ -121,7 +125,31 @@ class ContentGenerator:
     def generate_branching_content(self, theme: str) -> dict:
         """お悩みテーマから、Q1(A/B)→Q2(θ/δ または η/φ)→最終診断4パターンの
         コンテンツ一式を生成する。"""
-        url = GEMINI_ENDPOINT_TEMPLATE.format(model=TEXT_MODEL)
+        try:
+            try:
+                content = self._call_gemini(TEXT_MODEL, theme)
+            except _ModelNotFoundError:
+                # Geminiのモデル名は時間の経過で変わることがある(実際に
+                # gemini-2.0-flashが404になるケースを確認済み)ため、
+                # 404の場合はAPI側から現在利用可能なモデル一覧を取得し、
+                # generateContent対応の最新モデルへ自動フォールバックする。
+                fallback_model = self._discover_fallback_model()
+                logger.warning(
+                    "モデル '%s' が見つからなかったため、'%s' にフォールバックします。",
+                    TEXT_MODEL,
+                    fallback_model,
+                )
+                content = self._call_gemini(fallback_model, theme)
+            self._validate_branching_content(content)
+            return content
+        except GeneratorError:
+            raise
+        except Exception as exc:
+            logger.exception("文章生成中にエラーが発生しました")
+            raise GeneratorError(str(exc)) from exc
+
+    def _call_gemini(self, model: str, theme: str) -> dict:
+        url = GEMINI_ENDPOINT_TEMPLATE.format(model=model)
         payload = {
             "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [
@@ -132,24 +160,38 @@ class ContentGenerator:
                 "responseMimeType": "application/json",
             },
         }
-        try:
-            response = requests.post(
-                url,
-                params={"key": self._api_key},
-                json=payload,
-                timeout=60,
-            )
-            response.raise_for_status()
-            data = response.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            content = json.loads(text)
-            self._validate_branching_content(content)
-            return content
-        except GeneratorError:
-            raise
-        except Exception as exc:
-            logger.exception("文章生成中にエラーが発生しました")
-            raise GeneratorError(str(exc)) from exc
+        response = requests.post(url, params={"key": self._api_key}, json=payload, timeout=60)
+        if response.status_code == 404:
+            raise _ModelNotFoundError(response.text)
+        response.raise_for_status()
+        data = response.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return json.loads(text)
+
+    def _discover_fallback_model(self) -> str:
+        response = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": self._api_key},
+            timeout=30,
+        )
+        response.raise_for_status()
+        models = response.json().get("models", [])
+        candidates = [
+            m["name"].removeprefix("models/")
+            for m in models
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+            and "flash" in m.get("name", "")
+        ]
+        if not candidates:
+            candidates = [
+                m["name"].removeprefix("models/")
+                for m in models
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+            ]
+        if not candidates:
+            raise GeneratorError("generateContentに対応するGeminiモデルが見つかりませんでした。")
+        candidates.sort(reverse=True)
+        return candidates[0]
 
     @staticmethod
     def _validate_branching_content(content: dict) -> None:
