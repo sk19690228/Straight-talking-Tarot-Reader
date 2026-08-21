@@ -4,6 +4,10 @@
 （マツコ×ひろゆき風）を自動生成・画像合成し、X・Instagram・Threadsへ
 自動配信・リプライ対応するシステムです。
 
+文章生成には無料枠のあるGoogle Gemini APIを、画像にはOpenAIなどの画像生成AIを
+使わず、あらかじめ用意した静的テンプレート素材（`assets/templates/`）を
+ランダムに組み合わせる方式を採用しており、OpenAI APIには一切依存しません。
+
 ジャンルは「深い悩みのある恋愛」に固定されています。以下の2段階の分岐で、
 読者ごとに異なる結末へたどり着く占い体験を提供します。
 
@@ -25,11 +29,14 @@
 ```
 ai_fortune_system/
 ├── main.py              # メインの実行ファイル・スケジューラー
-├── generator.py          # OpenAI API連携（文章・画像生成）
+├── generator.py          # 文章生成（Gemini API）・画像テンプレート選定ロジック
 ├── image_processor.py    # Pillowによるテキスト合成処理
 ├── publisher.py           # 各SNS（X, Instagram, Threads）への配信ロジック
 ├── responder.py            # リプライ検知・自動返信ロジック
 ├── register_tweet_id.py   # 手動投稿したツイートIDを登録するスクリプト
+├── scripts/
+│   └── generate_templates.py  # 静的タロット風テンプレート素材の生成（初回のみ実行）
+├── assets/templates/      # 静的なタロット風背景素材（positive/negative）
 ├── fonts/                    # 日本語フォント（同梱、環境依存の文字化け防止）
 └── requirements.txt
 ```
@@ -44,7 +51,7 @@ Python環境構築は不要です。
 GitHubのリポジトリで `Settings → Secrets and variables → Actions → New repository secret`
 から、以下を1つずつ登録してください（値はご自身のAPIキー）。
 
-- `OPENAI_API_KEY`
+- `GEMINI_API_KEY`（文章生成用。[Google AI Studio](https://aistudio.google.com/apikey)で無料取得可能）
 - `X_API_KEY`
 - `X_API_SECRET`
 - `X_ACCESS_TOKEN`
@@ -83,8 +90,9 @@ GitHubのリポジトリで `Settings → Secrets and variables → Actions → 
 実行のたびに引き継がれます。Q2用の画像はbase64化して状態ファイルに含めるため、
 コミットのたびにリポジトリのサイズが数MB増える点にご注意ください。
 
-なお、1日あたりの画像生成はQ1(2枚)+Q2-A用(2枚)+Q2-B用(2枚)の合計6枚になるため、
-以前（1日2枚）よりOpenAIの画像生成コストが増加します。
+画像はAIで毎回生成せず、`assets/templates/positive` `assets/templates/negative`
+配下の静的なタロット風素材からランダムに選んで合成するだけなので、画像生成にかかる
+APIコストは一切かかりません（Q1・Q2-A・Q2-Bの計3ペア×2枚=6枚とも同様）。
 
 ## ローカルで動かす場合のセットアップ
 
@@ -97,6 +105,13 @@ cp .env.example .env  # 各種APIキーを設定
 
 `fonts/` に日本語フォント（例: Noto Sans JP）を配置してください。詳細は
 `ai_fortune_system/fonts/README.md` を参照してください。
+
+`assets/templates/` の静的画像素材はリポジトリに同梱済みのため、通常は
+何もする必要はありません。デザインを差し替えたい場合のみ、次のコマンドで
+再生成できます（Pillowだけで完結し、外部APIは使いません）。
+```bash
+python3 scripts/generate_templates.py
+```
 
 Instagram/Threads APIは画像をローカルファイルとしてアップロードできず、
 公開URL経由での参照が必須です。生成画像を公開配信できるURL

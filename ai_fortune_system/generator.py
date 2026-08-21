@@ -1,22 +1,31 @@
-"""OpenAI API連携モジュール — 辛口タロット占いの文章・画像生成を担当する。
+"""コンテンツ生成モジュール — 辛口タロット占いの文章・画像素材の選定を担当する。
+
+OpenAI APIには依存しない構成です。
+- 文章生成: Google Gemini API（無料枠あり）
+- 画像: 毎回AIで生成せず、あらかじめ用意した静的テンプレート素材
+  （assets/templates/positive, negative。scripts/generate_templates.pyで生成済み）
+  からランダムに選ぶだけなので、画像生成コストは一切かかりません。
 
 2段階分岐（Q1: A/B → Q2: θ/δ または η/φ → 最終診断）のコンテンツ一式を
-1回のAPI呼び出しで生成し、各ペアごとに対比画像を2枚ずつ生成する。
+1回のAPI呼び出しで生成する。
 """
 
-import base64
 import json
 import logging
 import os
 import random
-import uuid
 
-from openai import OpenAI
+import requests
 
 logger = logging.getLogger(__name__)
 
-TEXT_MODEL = "gpt-4o"
-IMAGE_MODEL = "gpt-image-1"
+TEXT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_ENDPOINT_TEMPLATE = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "assets", "templates")
 
 DAILY_THEMES = [
     "浮気疑惑のある恋人と、この先も一緒にいるべきか",
@@ -61,7 +70,8 @@ SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です�
   （実際の返信は常に「A」または「B」の1文字。θ/δ/η/φはあなたが内部で
   区別するための名称であり、読者に見せる返信の指示は必ずA/Bにする）。
 
-出力は必ず次の構造を持つJSONオブジェクトのみとします。
+出力は必ず次の構造を持つJSONオブジェクトのみとします。前後に説明文やコードブロックの
+記号（```など）を一切付けないでください。
 {
   "level1": {
     "question": "Q1の投稿本文（120文字以内。Aへは『A』、Bへは『B』とリプライするよう
@@ -101,10 +111,9 @@ class GeneratorError(Exception):
 
 class ContentGenerator:
     def __init__(self, api_key: str | None = None):
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise GeneratorError("OPENAI_API_KEY が設定されていません。")
-        self._client = OpenAI(api_key=api_key)
+        self._api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if not self._api_key:
+            raise GeneratorError("GEMINI_API_KEY が設定されていません。")
 
     def pick_daily_theme(self) -> str:
         return random.choice(DAILY_THEMES)
@@ -112,17 +121,28 @@ class ContentGenerator:
     def generate_branching_content(self, theme: str) -> dict:
         """お悩みテーマから、Q1(A/B)→Q2(θ/δ または η/φ)→最終診断4パターンの
         コンテンツ一式を生成する。"""
+        url = GEMINI_ENDPOINT_TEMPLATE.format(model=TEXT_MODEL)
+        payload = {
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [
+                {"role": "user", "parts": [{"text": f"本日のお悩みテーマ: {theme}"}]}
+            ],
+            "generationConfig": {
+                "temperature": 0.9,
+                "responseMimeType": "application/json",
+            },
+        }
         try:
-            response = self._client.chat.completions.create(
-                model=TEXT_MODEL,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"本日のお悩みテーマ: {theme}"},
-                ],
-                temperature=0.9,
+            response = requests.post(
+                url,
+                params={"key": self._api_key},
+                json=payload,
+                timeout=60,
             )
-            content = json.loads(response.choices[0].message.content)
+            response.raise_for_status()
+            data = response.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            content = json.loads(text)
             self._validate_branching_content(content)
             return content
         except GeneratorError:
@@ -153,42 +173,30 @@ class ContentGenerator:
         output_dir: str,
         suffix_prefix: str,
     ) -> tuple[str, str]:
-        """前向き・厳しい現実を対比的に表すタロット風画像を2枚生成する。"""
-        prompt_positive = (
-            "The oldest style of hand-painted medieval tarot card, 15th-century illuminated "
-            "manuscript style like the earliest surviving tarot decks, aged gold leaf and "
-            "cracked parchment texture, faded pigments, symbolizing hope and a positive turn "
-            "in a deep romantic dilemma, warm faded gold and rose tones, blooming flowers, "
-            "radiant halo light, hand-drawn ornate medieval border, no text, no words, "
-            f"ancient mystical illustration, evoking: '{positive_label}'"
-        )
-        prompt_negative = (
-            "The oldest style of hand-painted medieval tarot card, 15th-century illuminated "
-            "manuscript style like the earliest surviving tarot decks, aged gold leaf and "
-            "cracked parchment texture, faded pigments, symbolizing doubt and a harsh, sobering "
-            "turn in a deep romantic dilemma, faded indigo and ash-grey tones, wilting flowers, "
-            "stormy shadowed light, hand-drawn ornate medieval border, no text, no words, "
-            f"ancient mystical illustration, evoking: '{negative_label}'"
-        )
+        """前向き・厳しい現実を対比的に表すタロット風画像を、静的テンプレート素材から
+        1枚ずつランダムに選んで返す（AIでの画像生成は行わない）。"""
+        positive_dir = os.path.join(TEMPLATES_DIR, "positive")
+        negative_dir = os.path.join(TEMPLATES_DIR, "negative")
         try:
-            path_positive = self._generate_single_image(prompt_positive, output_dir, f"{suffix_prefix}_pos")
-            path_negative = self._generate_single_image(prompt_negative, output_dir, f"{suffix_prefix}_neg")
+            path_positive = self._pick_random_template(positive_dir)
+            path_negative = self._pick_random_template(negative_dir)
             return path_positive, path_negative
         except Exception as exc:
-            logger.exception("画像生成中にエラーが発生しました")
+            logger.exception("画像テンプレートの選定中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
-    def _generate_single_image(self, prompt: str, output_dir: str, suffix: str) -> str:
-        response = self._client.images.generate(
-            model=IMAGE_MODEL,
-            prompt=prompt,
-            size="1024x1536",
-            n=1,
-        )
-        image_bytes = base64.b64decode(response.data[0].b64_json)
-
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f"bg_{suffix}_{uuid.uuid4().hex}.png")
-        with open(output_path, "wb") as f:
-            f.write(image_bytes)
-        return output_path
+    @staticmethod
+    def _pick_random_template(directory: str) -> str:
+        if not os.path.isdir(directory):
+            raise GeneratorError(
+                f"テンプレート素材フォルダが見つかりません: {directory}\n"
+                "先に `python3 scripts/generate_templates.py` を実行してください。"
+            )
+        candidates = [
+            os.path.join(directory, name)
+            for name in os.listdir(directory)
+            if name.lower().endswith(".png")
+        ]
+        if not candidates:
+            raise GeneratorError(f"テンプレート素材が1枚も見つかりません: {directory}")
+        return random.choice(candidates)
