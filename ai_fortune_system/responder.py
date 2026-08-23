@@ -137,6 +137,9 @@ class ReplyResponder:
             logger.exception("Xの認証ユーザー情報取得に失敗しました")
             return
 
+        replies_by_id: dict = {}
+        users_by_id: dict = {}
+
         try:
             mentions = self._client.get_users_mentions(
                 id=me.id,
@@ -145,19 +148,47 @@ class ReplyResponder:
                 expansions=["author_id"],
                 user_fields=["username"],
             )
+            for tweet in mentions.data or []:
+                replies_by_id[tweet.id] = tweet
+            for user in (mentions.includes or {}).get("users", []):
+                users_by_id[user.id] = user
         except Exception:
             logger.exception("メンション取得に失敗しました")
+
+        # get_users_mentions は本文中に「@ユーザー名」が明示的に含まれるツイートしか
+        # 拾えない。Xの返信UIは現在、本文に@メンションを自動挿入しないため、
+        # 「A」とだけ書かれたような返信は上記だけでは検知できない。そのため、
+        # 当日の投稿(Q1)のconversation_id配下の返信を直接検索して補完する
+        # (Q1→Q2→最終診断は同じ返信スレッドなので、1回の検索で両方拾える)。
+        try:
+            conversation = self._client.search_recent_tweets(
+                query=f"conversation_id:{daily_state['tweet_id']} -from:{me.username}",
+                since_id=since_id,
+                tweet_fields=["referenced_tweets", "author_id"],
+                expansions=["author_id"],
+                user_fields=["username"],
+                max_results=100,
+            )
+            for tweet in conversation.data or []:
+                replies_by_id[tweet.id] = tweet
+            for user in (conversation.includes or {}).get("users", []):
+                users_by_id[user.id] = user
+        except Exception:
+            logger.warning(
+                "会話スレッドの検索に失敗しました(X APIのアクセス権限不足の可能性があります)。"
+                "@メンション付きの返信のみで検知を継続します。",
+                exc_info=True,
+            )
+
+        if not replies_by_id:
             return
 
-        if not mentions.data:
-            return
-
-        users_by_id = {u.id: u for u in (mentions.includes.get("users", []) if mentions.includes else [])}
+        mention_list = sorted(replies_by_id.values(), key=lambda t: int(t.id))
         level2_threads: dict = daily_state.get("level2_threads", {})
         state_changed = False
         latest_processed_id = since_id
 
-        for mention in reversed(mentions.data):
+        for mention in mention_list:
             latest_processed_id = mention.id
 
             match = ANSWER_PATTERN.match(mention.text or "")
