@@ -29,15 +29,18 @@ CANVAS_SIZE = (1024, 1536)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "assets", "templates")
 
+# Visconti-Sforza / Marseille版など「現存最古級」のタロットカードを参考にした配色。
+# 当時の実物同様、暗い場面のカード(negative)も含めて金箔をベースにしており、
+# 単純な暖色/寒色の対比ではなく「金地に緋色」「金地に藍黒」という違いにしている。
 POSITIVE_PALETTES = [
-    ((214, 168, 88), (176, 92, 78)),
-    ((232, 194, 120), (196, 108, 96)),
-    ((210, 160, 70), (150, 80, 90)),
+    ((224, 178, 84), (168, 58, 54)),
+    ((236, 196, 110), (188, 82, 64)),
+    ((208, 150, 60), (150, 46, 58)),
 ]
 NEGATIVE_PALETTES = [
-    ((60, 66, 92), (26, 28, 40)),
-    ((70, 74, 100), (34, 30, 46)),
-    ((52, 60, 82), (20, 22, 32)),
+    ((188, 140, 70), (58, 24, 34)),
+    ((176, 130, 68), (44, 30, 58)),
+    ((196, 148, 76), (40, 20, 24)),
 ]
 
 # 大アルカナ22枚。(スラッグ, 気分, 番号)。気分は恋愛の悩みというテーマに
@@ -72,6 +75,10 @@ def _lerp(a: int, b: int, t: float) -> int:
     return int(a + (b - a) * t)
 
 
+def _blend_color(c1, c2, t: float) -> tuple[int, int, int]:
+    return tuple(_lerp(c1[i], c2[i], t) for i in range(3))
+
+
 def _gradient_background(size: tuple[int, int], top_color, bottom_color) -> Image.Image:
     w, h = size
     img = Image.new("RGB", size, top_color)
@@ -91,25 +98,84 @@ def _add_parchment_noise(img: Image.Image, amount: int = 10) -> Image.Image:
     return Image.blend(img, noise_rgb, alpha)
 
 
+def _draw_diaper_pattern(draw: ImageDraw.ImageDraw, size: tuple[int, int], color, spacing: int = 68) -> None:
+    """Visconti-Sforza版などに見られる、金地に打ち出された菱形格子(diaper pattern)を
+    低コントラストで背景全体に敷く。"""
+    w, h = size
+    margin = 60
+    row = 0
+    y = margin
+    while y < h - margin:
+        offset = (spacing // 2) if row % 2 else 0
+        x = margin + offset
+        while x < w - margin:
+            r = spacing * 0.32
+            draw.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)], outline=color, width=1)
+            x += spacing
+        y += spacing
+        row += 1
+
+
+def _draw_quatrefoil(draw: ImageDraw.ImageDraw, center, radius, color, width: int = 3) -> None:
+    """四つ葉のクローバー状の飾り(古い装飾写本・タロットカードの角飾りに多い意匠)。"""
+    cx, cy = center
+    r = radius * 0.55
+    for dx, dy in [(-r, 0), (r, 0), (0, -r), (0, r)]:
+        draw.ellipse([cx + dx - r, cy + dy - r, cx + dx + r, cy + dy + r], outline=color, width=width)
+    draw.ellipse(
+        [cx - radius * 0.25, cy - radius * 0.25, cx + radius * 0.25, cy + radius * 0.25], outline=color, width=width
+    )
+
+
+def _draw_crackle(draw: ImageDraw.ImageDraw, size: tuple[int, int], color, rng: random.Random, count: int = 16) -> None:
+    """経年で生じたニス・顔料のひび割れを模した、細く控えめなひび模様を全面に散らす。"""
+    w, h = size
+    for _ in range(count):
+        x, y = rng.uniform(0, w), rng.uniform(0, h)
+        segments = rng.randint(2, 4)
+        for _ in range(segments):
+            nx = x + rng.uniform(-40, 40)
+            ny = y + rng.uniform(-40, 40)
+            draw.line([(x, y), (nx, ny)], fill=color, width=1)
+            x, y = nx, ny
+
+
+def _draw_numeral_banner(draw: ImageDraw.ImageDraw, center, width_: float, height: float, color) -> None:
+    """カード番号を収める、両端が尖った古い巻物(カルトゥーシュ)風の帯。"""
+    cx, cy = center
+    left, right = cx - width_ / 2, cx + width_ / 2
+    top, bottom = cy - height / 2, cy + height / 2
+    notch = height * 0.45
+    draw.polygon(
+        [
+            (left, top),
+            (right, top),
+            (right + notch, cy),
+            (right, bottom),
+            (left, bottom),
+            (left - notch, cy),
+        ],
+        outline=color,
+        width=2,
+    )
+
+
 def _draw_ornate_border(draw: ImageDraw.ImageDraw, size: tuple[int, int], color) -> None:
     w, h = size
     margin = 36
     draw.rectangle([margin, margin, w - margin, h - margin], outline=color, width=6)
     draw.rectangle([margin + 14, margin + 14, w - margin - 14, h - margin - 14], outline=color, width=2)
 
-    corner_r = 26
     for cx, cy in [
         (margin, margin),
         (w - margin, margin),
         (margin, h - margin),
         (w - margin, h - margin),
     ]:
-        draw.ellipse([cx - corner_r, cy - corner_r, cx + corner_r, cy + corner_r], outline=color, width=4)
-        draw.ellipse([cx - corner_r // 2, cy - corner_r // 2, cx + corner_r // 2, cy + corner_r // 2], outline=color, width=2)
+        _draw_quatrefoil(draw, (cx, cy), 30, color, width=3)
 
     for cy in (margin, h - margin):
-        cx = w // 2
-        draw.ellipse([cx - 16, cy - 16, cx + 16, cy + 16], outline=color, width=3)
+        _draw_quatrefoil(draw, (w // 2, cy), 20, color, width=2)
 
 
 def _draw_roman_numeral_label(draw: ImageDraw.ImageDraw, numeral: str, size: tuple[int, int], color) -> None:
@@ -557,19 +623,31 @@ def _make_card(slug: str, mood: str, numeral: str) -> Image.Image:
     rng = random.Random(f"{slug}-{mood}")
     if mood == "positive":
         top_color, bottom_color = rng.choice(POSITIVE_PALETTES)
-        line_color = (255, 235, 200)
+        line_color = (255, 228, 168)
     else:
         top_color, bottom_color = rng.choice(NEGATIVE_PALETTES)
-        line_color = (150, 160, 190)
+        line_color = (214, 184, 128)
+
+    # 金地に打ち出した格子模様(diaper pattern)は背景に溶け込む薄い金色に、
+    # ひび割れは地の色をわずかに暗くした色にして、どちらも図案より目立たないようにする。
+    pattern_color = _blend_color(top_color, line_color, 0.3)
+    crackle_color = _blend_color(bottom_color, (10, 6, 8), 0.22)
 
     img = _gradient_background(CANVAS_SIZE, top_color, bottom_color)
     img = _add_parchment_noise(img, amount=14 if mood == "positive" else 16)
     draw = ImageDraw.Draw(img)
 
+    _draw_diaper_pattern(draw, CANVAS_SIZE, pattern_color)
+
     icon_fn = CARD_ICONS[slug]
     icon_fn(draw, CANVAS_SIZE, line_color, rng)
 
+    _draw_crackle(draw, CANVAS_SIZE, crackle_color, rng, count=12)
+
     _draw_ornate_border(draw, CANVAS_SIZE, line_color)
+    w, h = CANVAS_SIZE
+    banner_width = max(70, 24 * len(numeral) + 20)
+    _draw_numeral_banner(draw, (w // 2, h - 60), banner_width, 44, line_color)
     _draw_roman_numeral_label(draw, numeral, CANVAS_SIZE, line_color)
     img = img.filter(ImageFilter.SMOOTH_MORE)
     return img
