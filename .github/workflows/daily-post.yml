@@ -1,8 +1,11 @@
 name: Daily Fortune Post
 
 on:
-  schedule:
-    - cron: '0 23 * * *' # 08:00 JST
+  # 自動スケジュール実行は停止しています。daily-postが新しい日付のコンテンツを
+  # 生成すると、前日分のtweet_id・level2_threads(Q1→Q2の会話スレッド対応表)が
+  # 上書きされてしまい、前日投稿への返信が二度と自動応答できなくなるため。
+  # 前日の会話が落ち着いたのを確認してから、Actionsタブで手動実行(workflow_dispatch)
+  # してください。
   workflow_dispatch: {}
 
 permissions:
