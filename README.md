@@ -8,9 +8,8 @@
 画像は日次のコンテンツ生成のたびにAIで作るのではなく、あらかじめ用意した
 静的なタロットカード素材（`assets/templates/`、大アルカナ22枚）を
 ランダムに組み合わせる方式のため、日々の投稿にかかる画像生成コストは
-かかりません。この22枚自体はGemini画像生成モデルで一度だけ生成し
-（Visconti-Sforza版タロットを参考にした画風）、リポジトリにコミットして
-使い回しています。
+かかりません。この22枚自体はご用意いただいたカード画像（JPEG）を
+リポジトリにコミットして使い回しています。
 
 ジャンルは「深い悩みのある恋愛」に固定されています。以下の2段階の分岐で、
 読者ごとに異なる結末へたどり着く占い体験を提供します。
@@ -39,9 +38,9 @@ ai_fortune_system/
 ├── responder.py            # リプライ検知・自動返信ロジック
 ├── register_tweet_id.py   # 手動投稿したツイートIDを登録するスクリプト
 ├── scripts/
-│   ├── generate_card_deck_gemini.py  # Gemini画像生成で大アルカナ22枚を作る(通常はこちらを使用)
+│   ├── generate_card_deck_gemini.py  # Gemini画像生成で大アルカナ22枚を作る(素材を差し替えたい時用)
 │   └── generate_templates.py         # Pillowだけで手続き的に図案を作る無料版(フォールバック用)
-├── assets/templates/      # タロットカード素材（positive/negative、大アルカナ22枚）
+├── assets/templates/      # タロットカード素材（positive/negative、大アルカナ22枚、JPEG）
 ├── fonts/                    # 日本語フォント（同梱、環境依存の文字化け防止）
 └── requirements.txt
 ```

@@ -254,7 +254,7 @@ class ContentGenerator:
         candidates = [
             os.path.join(directory, name)
             for name in os.listdir(directory)
-            if name.lower().endswith(".png")
+            if name.lower().endswith((".png", ".jpg", ".jpeg"))
         ]
         if not candidates:
             raise GeneratorError(f"テンプレート素材が1枚も見つかりません: {directory}")
