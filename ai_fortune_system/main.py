@@ -54,15 +54,29 @@ def run_daily_fortune_job() -> None:
         results = SNSPublisher().publish_all(image_path, level1["question"], post_to_x=auto_post_to_x)
         logger.info("配信結果: %s", results)
 
+        with open(image_path, "rb") as f:
+            level1_image_bytes = f.read()
         with open(level2_a_image_path, "rb") as f:
             level2_a_image_bytes = f.read()
         with open(level2_b_image_path, "rb") as f:
             level2_b_image_bytes = f.read()
 
+        # 最終診断4パターンそれぞれに添える1枚のタロットカード画像を選ぶ。
+        # a_theta/b_etaは各分岐の中でも前向きな結末、a_delta/b_phiは厳しい
+        # 現実を直視する結末なので、対応するpositive/negativeの山から選ぶ。
+        result_moods = {"a_theta": "positive", "a_delta": "negative", "b_eta": "positive", "b_phi": "negative"}
+        results_images = {}
+        for result_key, mood in result_moods.items():
+            result_image_path = generator.pick_result_image(mood)
+            with open(result_image_path, "rb") as f:
+                results_images[result_key] = f.read()
+
         # tweet_idがNone（手動投稿モード、またはX投稿失敗）でも、Q1/Q2/最終診断一式は
         # ここで保存しておく。手動投稿後にregister_tweet_id.pyでツイートIDだけ登録すれば、
         # Q2以降のリプライ自動応答が有効になる。
-        save_daily_state(results.get("x_tweet_id"), content, theme, level2_a_image_bytes, level2_b_image_bytes)
+        save_daily_state(
+            results.get("x_tweet_id"), content, theme, level1_image_bytes, level2_a_image_bytes, level2_b_image_bytes, results_images
+        )
 
         if not auto_post_to_x:
             logger.info("=== Xへ手動投稿してください ===")

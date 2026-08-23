@@ -236,6 +236,14 @@ class ContentGenerator:
             logger.exception("画像テンプレートの選定中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
+    def pick_result_image(self, mood: str) -> str:
+        """最終診断1件に添える1枚のタロットカード画像を選ぶ(mood: "positive"/"negative")。"""
+        try:
+            return self._pick_random_template(os.path.join(TEMPLATES_DIR, mood))
+        except Exception as exc:
+            logger.exception("最終診断用の画像選定中にエラーが発生しました")
+            raise GeneratorError(str(exc)) from exc
+
     @staticmethod
     def _pick_random_template(directory: str) -> str:
         if not os.path.isdir(directory):

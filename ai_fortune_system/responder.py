@@ -37,10 +37,19 @@ def save_daily_state(
     tweet_id: str | None,
     content: dict,
     theme: str,
+    level1_image_bytes: bytes,
     level2_a_image_bytes: bytes,
     level2_b_image_bytes: bytes,
+    results_images: dict[str, bytes],
 ) -> None:
-    """当日の分岐コンテンツ一式（Q1/Q2/最終診断・Q2用画像）を保存する。"""
+    """当日の分岐コンテンツ一式（Q1/Q2/最終診断・各画像）を保存する。
+
+    level1_image_bytesはQ1の合成画像そのもの。GitHub Actionsの実行ログ・
+    Artifactsを経由しなくても、リポジトリにコミットされたこの状態ファイルから
+    直接デコードして画像を取り出せるようにするために保存する。
+    results_imagesは最終診断4パターン(a_theta/a_delta/b_eta/b_phi)それぞれに
+    添えるタロットカード画像1枚ずつ。
+    """
     os.makedirs(STATE_DIR, exist_ok=True)
     data = {
         "tweet_id": tweet_id,
@@ -49,8 +58,12 @@ def save_daily_state(
         "level2_a": content["level2_a"],
         "level2_b": content["level2_b"],
         "results": content["results"],
+        "level1_image_b64": base64.b64encode(level1_image_bytes).decode("ascii"),
         "level2_a_image_b64": base64.b64encode(level2_a_image_bytes).decode("ascii"),
         "level2_b_image_b64": base64.b64encode(level2_b_image_bytes).decode("ascii"),
+        "results_images_b64": {
+            key: base64.b64encode(image_bytes).decode("ascii") for key, image_bytes in results_images.items()
+        },
         "level2_threads": {},
     }
     with open(DAILY_STATE_PATH, "w", encoding="utf-8") as f:
@@ -228,7 +241,9 @@ class ReplyResponder:
 
             try:
                 reply_text = self._build_final_reply_text(username, daily_state["results"][result_key])
-                self._post_reply(mention.id, reply_text)
+                result_image_b64 = daily_state.get("results_images_b64", {}).get(result_key)
+                result_image_bytes = base64.b64decode(result_image_b64) if result_image_b64 else None
+                self._post_reply(mention.id, reply_text, result_image_bytes)
                 logger.info("最終診断の自動返信に成功しました: mention_id=%s result=%s", mention.id, result_key)
             except Exception:
                 logger.exception("最終診断の自動返信に失敗しました: mention_id=%s", mention.id)
