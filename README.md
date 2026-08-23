@@ -4,9 +4,13 @@
 （マツコ×ひろゆき風）を自動生成・画像合成し、X・Instagram・Threadsへ
 自動配信・リプライ対応するシステムです。
 
-文章生成には無料枠のあるGoogle Gemini APIを、画像にはOpenAIなどの画像生成AIを
-使わず、あらかじめ用意した静的テンプレート素材（`assets/templates/`）を
-ランダムに組み合わせる方式を採用しており、OpenAI APIには一切依存しません。
+文章生成にはGoogle Gemini APIを使用します。OpenAI APIには一切依存しません。
+画像は日次のコンテンツ生成のたびにAIで作るのではなく、あらかじめ用意した
+静的なタロットカード素材（`assets/templates/`、大アルカナ22枚）を
+ランダムに組み合わせる方式のため、日々の投稿にかかる画像生成コストは
+かかりません。この22枚自体はGemini画像生成モデルで一度だけ生成し
+（Visconti-Sforza版タロットを参考にした画風）、リポジトリにコミットして
+使い回しています。
 
 ジャンルは「深い悩みのある恋愛」に固定されています。以下の2段階の分岐で、
 読者ごとに異なる結末へたどり着く占い体験を提供します。
@@ -35,8 +39,9 @@ ai_fortune_system/
 ├── responder.py            # リプライ検知・自動返信ロジック
 ├── register_tweet_id.py   # 手動投稿したツイートIDを登録するスクリプト
 ├── scripts/
-│   └── generate_templates.py  # 静的タロット風テンプレート素材の生成（初回のみ実行）
-├── assets/templates/      # 静的なタロット風背景素材（positive/negative）
+│   ├── generate_card_deck_gemini.py  # Gemini画像生成で大アルカナ22枚を作る(通常はこちらを使用)
+│   └── generate_templates.py         # Pillowだけで手続き的に図案を作る無料版(フォールバック用)
+├── assets/templates/      # タロットカード素材（positive/negative、大アルカナ22枚）
 ├── fonts/                    # 日本語フォント（同梱、環境依存の文字化け防止）
 └── requirements.txt
 ```
@@ -60,7 +65,7 @@ GitHubのリポジトリで `Settings → Secrets and variables → Actions → 
 
 日本語フォントは、ワークフロー内で毎回 `apt-get install fonts-noto-cjk` により自動でインストールされるため、`fonts/` への配置は不要です。
 
-### 2. 3つのワークフロー
+### 2. 4つのワークフロー
 
 - **`.github/workflows/daily-post.yml`**: **自動スケジュール実行は停止しています**
   （`Actions`タブから手動実行のみ）。当日のコンテンツと画像を生成します
@@ -75,6 +80,11 @@ GitHubのリポジトリで `Settings → Secrets and variables → Actions → 
 - **`.github/workflows/register-tweet.yml`**: 手動投稿したツイートのIDを登録します。
   GitHubの「Actions」タブ→「Register Tweet ID」→「Run workflow」から、ツイートIDを
   入力して実行してください。
+- **`.github/workflows/generate-card-deck.yml`**: `assets/templates/`のタロットカード
+  画像（大アルカナ22枚）をGemini画像生成モデルで作り直します。通常は実行不要です
+  （素材はリポジトリに同梱済み）。デザインを変えたい時や特定のカードだけ差し替えたい時に
+  手動実行してください（`cards`欄にスラッグをスペース区切りで入力すると、そのカードだけ
+  再生成します。例: `the_tower the_devil`。空欄なら22枚すべて）。
 
 いずれも `Actions` タブから「Run workflow」で今すぐ手動実行できます。
 
@@ -116,9 +126,14 @@ cp .env.example .env  # 各種APIキーを設定
 `ai_fortune_system/fonts/README.md` を参照してください。
 
 `assets/templates/` の静的画像素材はリポジトリに同梱済みのため、通常は
-何もする必要はありません。デザインを差し替えたい場合のみ、次のコマンドで
-再生成できます（Pillowだけで完結し、外部APIは使いません）。
+何もする必要はありません。デザインを差し替えたい場合は、次のいずれかで
+再生成できます。
+
 ```bash
+# Gemini画像生成モデルで実際にAIに描かせる(要GEMINI_API_KEY・ネットワーク)
+GEMINI_API_KEY=xxx python3 scripts/generate_card_deck_gemini.py
+
+# Pillowだけで手続き的に図案を描く無料版(外部APIなし、フォールバック用)
 python3 scripts/generate_templates.py
 ```
 
