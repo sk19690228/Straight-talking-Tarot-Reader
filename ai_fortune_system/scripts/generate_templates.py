@@ -29,19 +29,24 @@ CANVAS_SIZE = (1024, 1536)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "assets", "templates")
 
-# Visconti-Sforza / Marseille版など「現存最古級」のタロットカードを参考にした配色。
-# 当時の実物同様、暗い場面のカード(negative)も含めて金箔をベースにしており、
-# 単純な暖色/寒色の対比ではなく「金地に緋色」「金地に藍黒」という違いにしている。
-POSITIVE_PALETTES = [
-    ((224, 178, 84), (168, 58, 54)),
-    ((236, 196, 110), (188, 82, 64)),
-    ((208, 150, 60), (150, 46, 58)),
-]
-NEGATIVE_PALETTES = [
-    ((188, 140, 70), (58, 24, 34)),
-    ((176, 130, 68), (44, 30, 58)),
-    ((196, 148, 76), (40, 20, 24)),
-]
+# Visconti-Sforza版タロット(現存する最古級のタロットカード、15世紀ミラノ)を参考にした構成。
+# 実物は上部が金箔の無地の空、下部が布地のような対比色の「地」になっており、
+# 人物・図像の背後には金の丸い後光(オーレオール)を置くのが特徴的。
+# ここではその構成を踏襲し、上部=金箔の空、下部=positive/negativeで色分けした
+# 織物風の「地」、図案の背後に後光、という3層構造にしている。
+SKY_TOP = (238, 196, 104)
+SKY_BOTTOM = (214, 168, 82)
+GROUND_PALETTES = {
+    "positive": [
+        ((46, 66, 122), (24, 36, 78)),
+        ((54, 74, 128), (28, 40, 84)),
+    ],
+    "negative": [
+        ((124, 34, 46), (68, 16, 26)),
+        ((112, 28, 52), (60, 14, 30)),
+    ],
+}
+GROUND_HEIGHT_RATIO = 0.34
 
 # 大アルカナ22枚。(スラッグ, 気分, 番号)。気分は恋愛の悩みというテーマに
 # 沿った独自の割り当て(伝統的なタロット解釈そのままではない)。
@@ -98,14 +103,18 @@ def _add_parchment_noise(img: Image.Image, amount: int = 10) -> Image.Image:
     return Image.blend(img, noise_rgb, alpha)
 
 
-def _draw_diaper_pattern(draw: ImageDraw.ImageDraw, size: tuple[int, int], color, spacing: int = 68) -> None:
-    """Visconti-Sforza版などに見られる、金地に打ち出された菱形格子(diaper pattern)を
-    低コントラストで背景全体に敷く。"""
+def _draw_diaper_pattern(
+    draw: ImageDraw.ImageDraw, size: tuple[int, int], color, spacing: int = 68, y_range: tuple[float, float] | None = None
+) -> None:
+    """Visconti-Sforza版などに見られる、金地・織物地に打ち出された菱形格子(diaper pattern)を
+    低コントラストで敷く。y_rangeを指定すると、その縦方向の範囲だけに敷く
+    (空・地それぞれに別の色で敷き分けるため)。"""
     w, h = size
     margin = 60
+    y_top, y_bottom = y_range if y_range else (margin, h - margin)
     row = 0
-    y = margin
-    while y < h - margin:
+    y = y_top
+    while y < y_bottom:
         offset = (spacing // 2) if row % 2 else 0
         x = margin + offset
         while x < w - margin:
@@ -114,6 +123,18 @@ def _draw_diaper_pattern(draw: ImageDraw.ImageDraw, size: tuple[int, int], color
             x += spacing
         y += spacing
         row += 1
+
+
+def _draw_aureole(draw: ImageDraw.ImageDraw, center, radius, color, rays: int = 24) -> None:
+    """図案の背後に置く、後光(オーレオール)。Visconti-Sforza版の人物像の多くが
+    金の丸い後光を背負っている意匠を単純化したもの。"""
+    cx, cy = center
+    for i in range(rays):
+        angle = (2 * math.pi / rays) * i
+        x1, y1 = cx + radius * 0.72 * math.cos(angle), cy + radius * 0.72 * math.sin(angle)
+        x2, y2 = cx + radius * math.cos(angle), cy + radius * math.sin(angle)
+        draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
+    draw.ellipse([cx - radius * 0.72, cy - radius * 0.72, cx + radius * 0.72, cy + radius * 0.72], outline=color, width=3)
 
 
 def _draw_quatrefoil(draw: ImageDraw.ImageDraw, center, radius, color, width: int = 3) -> None:
@@ -162,9 +183,9 @@ def _draw_numeral_banner(draw: ImageDraw.ImageDraw, center, width_: float, heigh
 
 def _draw_ornate_border(draw: ImageDraw.ImageDraw, size: tuple[int, int], color) -> None:
     w, h = size
-    margin = 36
-    draw.rectangle([margin, margin, w - margin, h - margin], outline=color, width=6)
-    draw.rectangle([margin + 14, margin + 14, w - margin - 14, h - margin - 14], outline=color, width=2)
+    margin = 34
+    draw.rectangle([margin, margin, w - margin, h - margin], outline=color, width=5)
+    draw.rectangle([margin + 12, margin + 12, w - margin - 12, h - margin - 12], outline=color, width=2)
 
     for cx, cy in [
         (margin, margin),
@@ -172,10 +193,7 @@ def _draw_ornate_border(draw: ImageDraw.ImageDraw, size: tuple[int, int], color)
         (margin, h - margin),
         (w - margin, h - margin),
     ]:
-        _draw_quatrefoil(draw, (cx, cy), 30, color, width=3)
-
-    for cy in (margin, h - margin):
-        _draw_quatrefoil(draw, (w // 2, cy), 20, color, width=2)
+        _draw_quatrefoil(draw, (cx, cy), 20, color, width=2)
 
 
 def _draw_roman_numeral_label(draw: ImageDraw.ImageDraw, numeral: str, size: tuple[int, int], color) -> None:
@@ -621,31 +639,35 @@ def _icon_world(draw, size, color, rng):
 
 def _make_card(slug: str, mood: str, numeral: str) -> Image.Image:
     rng = random.Random(f"{slug}-{mood}")
-    if mood == "positive":
-        top_color, bottom_color = rng.choice(POSITIVE_PALETTES)
-        line_color = (255, 228, 168)
-    else:
-        top_color, bottom_color = rng.choice(NEGATIVE_PALETTES)
-        line_color = (214, 184, 128)
+    ground_top_color, ground_bottom_color = rng.choice(GROUND_PALETTES[mood])
+    line_color = (255, 232, 176)
 
-    # 金地に打ち出した格子模様(diaper pattern)は背景に溶け込む薄い金色に、
-    # ひび割れは地の色をわずかに暗くした色にして、どちらも図案より目立たないようにする。
-    pattern_color = _blend_color(top_color, line_color, 0.3)
-    crackle_color = _blend_color(bottom_color, (10, 6, 8), 0.22)
+    w, h = CANVAS_SIZE
+    ground_top = int(h * (1 - GROUND_HEIGHT_RATIO))
 
-    img = _gradient_background(CANVAS_SIZE, top_color, bottom_color)
-    img = _add_parchment_noise(img, amount=14 if mood == "positive" else 16)
+    # Visconti-Sforza版の構図: 上部=金箔の無地の空、下部=対比色の織物風の地。
+    img = _gradient_background(CANVAS_SIZE, SKY_TOP, SKY_BOTTOM)
+    ground_img = _gradient_background((w, h - ground_top), ground_top_color, ground_bottom_color)
+    img.paste(ground_img, (0, ground_top))
+    img = _add_parchment_noise(img, amount=12)
     draw = ImageDraw.Draw(img)
 
-    _draw_diaper_pattern(draw, CANVAS_SIZE, pattern_color)
+    sky_pattern_color = _blend_color(SKY_TOP, line_color, 0.25)
+    ground_pattern_color = _blend_color(ground_top_color, line_color, 0.3)
+    _draw_diaper_pattern(draw, CANVAS_SIZE, sky_pattern_color, y_range=(60, ground_top))
+    _draw_diaper_pattern(draw, CANVAS_SIZE, ground_pattern_color, y_range=(ground_top + 12, h - 60))
+    draw.line([(0, ground_top), (w, ground_top)], fill=line_color, width=3)
+
+    # 図案の背後に金の後光(オーレオール)を置く(Visconti-Sforza版の人物像に多い意匠)。
+    _draw_aureole(draw, (w // 2, int(h * 0.42)), 190, line_color)
 
     icon_fn = CARD_ICONS[slug]
     icon_fn(draw, CANVAS_SIZE, line_color, rng)
 
-    _draw_crackle(draw, CANVAS_SIZE, crackle_color, rng, count=12)
+    crackle_color = _blend_color(ground_bottom_color, (10, 6, 8), 0.2)
+    _draw_crackle(draw, CANVAS_SIZE, crackle_color, rng, count=10)
 
     _draw_ornate_border(draw, CANVAS_SIZE, line_color)
-    w, h = CANVAS_SIZE
     banner_width = max(70, 24 * len(numeral) + 20)
     _draw_numeral_banner(draw, (w // 2, h - 60), banner_width, 44, line_color)
     _draw_roman_numeral_label(draw, numeral, CANVAS_SIZE, line_color)
