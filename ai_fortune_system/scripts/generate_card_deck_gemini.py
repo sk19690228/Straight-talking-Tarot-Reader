@@ -201,7 +201,7 @@ def generate_card_image(slug: str, api_key: str, model: str) -> tuple[bytes, str
                 print("    responseModalitiesを['TEXT','IMAGE']に変更して再試行")
                 continue
             if response.status_code == 429:
-                wait = 30 * (attempt + 1)
+                wait = 20 * (attempt + 1)
                 print(f"    試行{attempt + 1}失敗: レート制限(429)。{wait}秒待って再試行")
                 time.sleep(wait)
                 continue

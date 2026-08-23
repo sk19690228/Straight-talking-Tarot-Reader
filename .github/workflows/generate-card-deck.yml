@@ -31,7 +31,7 @@ jobs:
         timeout-minutes: 20
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python3 scripts/generate_card_deck_gemini.py ${{ inputs.cards }}
+        run: python3 -u scripts/generate_card_deck_gemini.py ${{ inputs.cards }}
 
       - name: Commit generated card images
         working-directory: ai_fortune_system
