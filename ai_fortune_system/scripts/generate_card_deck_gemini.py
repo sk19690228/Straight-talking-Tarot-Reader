@@ -179,9 +179,11 @@ def _discover_image_model(api_key: str) -> str:
     return pool[0]
 
 
-def generate_card_image(slug: str, api_key: str, model: str) -> bytes:
-    """1枚分のカード画像バイト列(PNG)を生成する。モデル名の404・リクエスト形式の
-    不一致・一時的なエラーに対しては、自動フォールバック・再試行を行う。"""
+def generate_card_image(slug: str, api_key: str, model: str) -> tuple[bytes, str]:
+    """1枚分のカード画像バイト列(PNG)と、実際に使用できたモデル名を返す。
+    モデル名の404・リクエスト形式の不一致・一時的なエラー(429含む)に対しては、
+    自動フォールバック・再試行を行う。429(レート制限)は通常のエラーより
+    長めに待ってから再試行する。"""
     prompt = f"{BASE_STYLE}\n\n{CARD_DESCRIPTIONS[slug]}"
     modalities = ["IMAGE"]
     current_model = model
@@ -198,8 +200,13 @@ def generate_card_image(slug: str, api_key: str, model: str) -> bytes:
                 modalities = ["TEXT", "IMAGE"]
                 print("    responseModalitiesを['TEXT','IMAGE']に変更して再試行")
                 continue
+            if response.status_code == 429:
+                wait = 30 * (attempt + 1)
+                print(f"    試行{attempt + 1}失敗: レート制限(429)。{wait}秒待って再試行")
+                time.sleep(wait)
+                continue
             response.raise_for_status()
-            return _extract_image_bytes(response.json())
+            return _extract_image_bytes(response.json()), current_model
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             wait = 5 * (attempt + 1)
@@ -223,17 +230,38 @@ def main() -> None:
     os.makedirs(negative_dir, exist_ok=True)
 
     model = GEMINI_IMAGE_MODEL
+    succeeded: list[str] = []
+    failed: list[str] = []
+
     for slug, mood, _numeral in MAJOR_ARCANA:
         if only_slugs and slug not in only_slugs:
             continue
         print(f"生成中: {slug} ({mood})")
-        image_bytes = generate_card_image(slug, api_key, model)
+        try:
+            image_bytes, model = generate_card_image(slug, api_key, model)
+        except DeckGenerationError as exc:
+            # 1枚の失敗で残り全部を巻き込まない: ログに残して次のカードへ進む。
+            # (それまでに保存できた分は最後にコミットされる。)
+            print(f"  スキップ: {exc}")
+            failed.append(slug)
+            continue
+
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         img = _resize_cover(img, CANVAS_SIZE)
         target_dir = positive_dir if mood == "positive" else negative_dir
         path = os.path.join(target_dir, f"{slug}.png")
         img.save(path, optimize=True)
         print(f"  保存: {path} ({os.path.getsize(path) // 1024}KB)")
+        succeeded.append(slug)
+
+        # 連続リクエストによるレート制限を避けるため、カード間に短い間隔を空ける。
+        time.sleep(3)
+
+    print(f"\n完了: 成功{len(succeeded)}枚 / 失敗{len(failed)}枚")
+    if failed:
+        print("失敗したカード(再実行時にこのスラッグを指定してください):", " ".join(failed))
+    if not succeeded:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
