@@ -137,14 +137,24 @@ INVITATION_SYSTEM_PROMPT = """あなたはSNSで人気の、自信家で色気�
 記号（```など）を一切付けないでください。
 {
   "top_lines": [
-    "1行目: 本日のお悩みテーマを、絵文字を使いながら一目で刺さる形で提案する一文（全角24文字以内。
-      「？」を使う場合は文末に置く）",
+    "1行目: 本日のお悩みテーマを、一目で刺さる形で提案する一文（全角24文字以内。「、」で
+      文を区切ってよい。「？」を使う場合は文末に置く）",
     "2行目: 悩みがあれば私に相談してね、という趣旨の一文。前後に絵文字を配置する（全角20文字以内）",
     "3行目: 神秘のトートタロットで占うわよ、という趣旨の一文。絵文字は1〜2個程度に控えめにし、
       1行に収まる長さにする（全角18文字以内）"
   ]
 }
 """
+
+# 1行目（テーマ提案文）の「、」を絵文字に置き換えて改行する際に使う絵文字。
+THEME_SEPARATOR_EMOJI = ["💔", "😢", "🥀", "💭", "😔", "😞"]
+THEME_ENDING_EMOJI = ["🔥", "💋", "✨", "🌙", "⭐"]
+
+# 文末が既に絵文字で終わっているかどうかの判定用（重複して追加しないため）。
+_TRAILING_EMOJI_RE = re.compile(
+    r"[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF\U0001F1E6-\U0001F1FF]"
+    r"[\U0000FE0F\U0001F3FB-\U0001F3FF]*$"
+)
 
 
 class GeneratorError(Exception):
@@ -199,12 +209,30 @@ class ContentGenerator:
             top_lines = content.get("top_lines")
             if not top_lines:
                 raise GeneratorError("生成結果に'top_lines'が含まれていません。")
-            return top_lines
+            return self._stylize_theme_line(top_lines[0]) + top_lines[1:]
         except GeneratorError:
             raise
         except Exception as exc:
             logger.exception("投稿画像用の文章生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
+
+    @staticmethod
+    def _stylize_theme_line(line: str) -> list[str]:
+        """1行目（テーマ提案文）の「、」を絵文字に置き換え、その位置で改行されるよう
+        複数行に分割する。最後のセグメントに絵文字が無ければ、文末にも1つ追加する。"""
+        segments = [seg for seg in line.split("、") if seg]
+        if not segments:
+            return [line]
+        styled: list[str] = []
+        for i, segment in enumerate(segments):
+            is_last = i == len(segments) - 1
+            if not is_last:
+                styled.append(f"{segment}{random.choice(THEME_SEPARATOR_EMOJI)}")
+            elif _TRAILING_EMOJI_RE.search(segment):
+                styled.append(segment)
+            else:
+                styled.append(f"{segment}{random.choice(THEME_ENDING_EMOJI)}")
+        return styled
 
     def _call_gemini_json_with_fallback(self, system_prompt: str, user_content: str) -> dict:
         try:

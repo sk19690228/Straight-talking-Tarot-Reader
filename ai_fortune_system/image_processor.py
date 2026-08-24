@@ -207,18 +207,33 @@ def _measure_atom(draw: ImageDraw.ImageDraw, atom_text: str, is_emoji: bool, jp_
 _HARD_BREAK_CHARS = "？?"
 
 
+def _is_emoji_only(text: str) -> bool:
+    return _EMOJI_PATTERN.sub("", text).strip() == ""
+
+
 def _split_at_hard_breaks(text: str) -> list[str]:
     """「？」（全角/半角）の直後を必ず行の区切りにするため、テキストをその位置で
-    分割する（各セグメントは行の折り返し処理へ個別に渡す）。"""
-    segments: list[str] = []
+    分割する（各セグメントは行の折り返し処理へ個別に渡す）。「、」は含めない
+    （generator.py側でテーマ行の「、」は既に絵文字に置き換え済みで、固定の案内文
+    （下段）には改行させたくない自然な「、」が含まれるため）。ただし、区切った
+    直後のセグメントが絵文字だけ（文末を飾る絵文字など）の場合は、絵文字だけの行が
+    孤立して表示されるのを防ぐため直前のセグメントにくっつける。"""
+    raw_segments: list[str] = []
     current = ""
     for ch in text:
         current += ch
         if ch in _HARD_BREAK_CHARS:
-            segments.append(current)
+            raw_segments.append(current)
             current = ""
     if current:
-        segments.append(current)
+        raw_segments.append(current)
+
+    segments: list[str] = []
+    for seg in raw_segments:
+        if segments and _is_emoji_only(seg):
+            segments[-1] += seg
+        else:
+            segments.append(seg)
     return segments
 
 
