@@ -204,12 +204,40 @@ def _measure_atom(draw: ImageDraw.ImageDraw, atom_text: str, is_emoji: bool, jp_
     return bbox[2] - bbox[0]
 
 
+_HARD_BREAK_CHARS = "？?"
+
+
+def _split_at_hard_breaks(text: str) -> list[str]:
+    """「？」（全角/半角）の直後を必ず行の区切りにするため、テキストをその位置で
+    分割する（各セグメントは行の折り返し処理へ個別に渡す）。"""
+    segments: list[str] = []
+    current = ""
+    for ch in text:
+        current += ch
+        if ch in _HARD_BREAK_CHARS:
+            segments.append(current)
+            current = ""
+    if current:
+        segments.append(current)
+    return segments
+
+
 def _wrap_mixed_line(
     draw: ImageDraw.ImageDraw, text: str, jp_font: ImageFont.FreeTypeFont, line_height: int, max_width: int
 ) -> list[list[tuple[str, bool]]]:
     """1行分のテキスト(日本語＋絵文字混在)を、max_widthに収まるよう複数行に折り返す。
-    2行以上になる場合は、単純に行末まで詰め込むと最後の行だけ極端に短くなりがちなため、
-    各行の幅ができるだけ揃うように区切り位置を調整する。"""
+    「？」の直後は必ず行を区切る。2行以上になる場合は、単純に行末まで詰め込むと
+    最後の行だけ極端に短くなりがちなため、各行の幅ができるだけ揃うように区切り位置を
+    調整する。"""
+    lines: list[list[tuple[str, bool]]] = []
+    for segment in _split_at_hard_breaks(text):
+        lines.extend(_wrap_segment(draw, segment, jp_font, line_height, max_width))
+    return lines
+
+
+def _wrap_segment(
+    draw: ImageDraw.ImageDraw, text: str, jp_font: ImageFont.FreeTypeFont, line_height: int, max_width: int
+) -> list[list[tuple[str, bool]]]:
     atoms = _atomize(text)
     if not atoms:
         return []
@@ -315,62 +343,84 @@ def _draw_atom_line(
             cursor_x += bbox[2] - bbox[0]
 
 
+LINE_SPACING = 14
+BLOCK_GAP = 10  # 下段内の2ブロック(通常サイズ/小サイズ)の間隔
+
+
+class _TextBlock:
+    """1つのフォントサイズで描画する行の集まり(折り返し済み)。"""
+
+    def __init__(self, draw: ImageDraw.ImageDraw, lines: list[str], jp_font: ImageFont.FreeTypeFont, font_size: int, max_width: int):
+        self.jp_font = jp_font
+        self.line_height = int(font_size * 1.3)
+        self.wrapped: list[list[tuple[str, bool]]] = []
+        for line in lines:
+            self.wrapped.extend(_wrap_mixed_line(draw, line, jp_font, self.line_height, max_width))
+
+    @property
+    def height(self) -> int:
+        if not self.wrapped:
+            return 0
+        return len(self.wrapped) * self.line_height + (len(self.wrapped) - 1) * LINE_SPACING
+
+
+def _draw_text_block(overlay: Image.Image, draw: ImageDraw.ImageDraw, block: "_TextBlock", canvas_width: int, y: int) -> int:
+    """ブロックを描画し、描画後のyカーソル位置を返す。"""
+    for line_atoms in block.wrapped:
+        line_width = sum(_measure_atom(draw, t, e, block.jp_font, block.line_height) for t, e in line_atoms)
+        x = (canvas_width - line_width) // 2
+        _draw_atom_line(overlay, draw, line_atoms, x, y, block.jp_font, block.line_height, "white", 3, "black")
+        y += block.line_height + LINE_SPACING
+    return y
+
+
 def compose_daily_invitation_image(
     card_path: str,
     top_lines: list[str],
     bottom_lines: list[str],
+    bottom_small_lines: list[str],
     output_dir: str,
     font_path: str | None = None,
     font_size: int = 50,
+    small_font_size: int = 36,
 ) -> str:
     """タロットカード1枚に、上段(テーマ問いかけ)・下段(入力案内)の文章を重ねた
-    投稿画像を作る。絵文字は日本語フォントとは別にカラー絵文字フォントで描画する。"""
+    投稿画像を作る。下段はさらに、通常サイズのbottom_linesと、より小さい
+    small_font_sizeで表示するbottom_small_linesの2ブロックに分かれる。
+    絵文字は日本語フォントとは別にカラー絵文字フォントで描画する。"""
     try:
         with Image.open(card_path) as img:
             base = _resize_cover(img.convert("RGB"), CANVAS_SIZE).convert("RGBA")
 
         jp_font = _load_font(font_path, font_size)
-        line_height = int(font_size * 1.3)
-        line_spacing = 14
+        jp_font_small = _load_font(font_path, small_font_size)
         max_text_width = int(CANVAS_SIZE[0] * 0.90)
 
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        def wrap_block(lines: list[str]) -> list[list[tuple[str, bool]]]:
-            wrapped: list[list[tuple[str, bool]]] = []
-            for line in lines:
-                wrapped.extend(_wrap_mixed_line(draw, line, jp_font, line_height, max_text_width))
-            return wrapped
-
-        def block_height(wrapped: list) -> int:
-            if not wrapped:
-                return 0
-            return len(wrapped) * line_height + (len(wrapped) - 1) * line_spacing
-
-        top_wrapped = wrap_block(top_lines)
-        bottom_wrapped = wrap_block(bottom_lines)
+        top_block = _TextBlock(draw, top_lines, jp_font, font_size, max_text_width)
+        bottom_block = _TextBlock(draw, bottom_lines, jp_font, font_size, max_text_width)
+        bottom_small_block = _TextBlock(draw, bottom_small_lines, jp_font_small, small_font_size, max_text_width)
 
         top_band_top = int(CANVAS_SIZE[1] * 0.03)
-        top_band_height = block_height(top_wrapped) + BAND_PADDING_Y * 2
+        top_band_height = top_block.height + BAND_PADDING_Y * 2
+
+        bottom_content_height = bottom_block.height + BLOCK_GAP + bottom_small_block.height
         bottom_band_bottom = int(CANVAS_SIZE[1] * 0.97)
-        bottom_band_height = block_height(bottom_wrapped) + BAND_PADDING_Y * 2
+        bottom_band_height = bottom_content_height + BAND_PADDING_Y * 2
         bottom_band_top = bottom_band_bottom - bottom_band_height
 
         draw.rectangle([(0, top_band_top), (CANVAS_SIZE[0], top_band_top + top_band_height)], fill=BAND_COLOR)
         draw.rectangle([(0, bottom_band_top), (CANVAS_SIZE[0], bottom_band_bottom)], fill=BAND_COLOR)
 
-        def draw_block(wrapped: list, band_top: int, band_height: int) -> None:
-            total_h = block_height(wrapped)
-            y = band_top + (band_height - total_h) // 2
-            for line_atoms in wrapped:
-                line_width = sum(_measure_atom(draw, t, e, jp_font, line_height) for t, e in line_atoms)
-                x = (CANVAS_SIZE[0] - line_width) // 2
-                _draw_atom_line(overlay, draw, line_atoms, x, y, jp_font, line_height, "white", 3, "black")
-                y += line_height + line_spacing
+        y = top_band_top + (top_band_height - top_block.height) // 2
+        _draw_text_block(overlay, draw, top_block, CANVAS_SIZE[0], y)
 
-        draw_block(top_wrapped, top_band_top, top_band_height)
-        draw_block(bottom_wrapped, bottom_band_top, bottom_band_height)
+        y = bottom_band_top + (bottom_band_height - bottom_content_height) // 2
+        y = _draw_text_block(overlay, draw, bottom_block, CANVAS_SIZE[0], y)
+        y += BLOCK_GAP - LINE_SPACING
+        _draw_text_block(overlay, draw, bottom_small_block, CANVAS_SIZE[0], y)
 
         canvas = Image.alpha_composite(base, overlay).convert("RGB")
 

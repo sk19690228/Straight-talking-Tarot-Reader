@@ -6,7 +6,12 @@ import os
 from apscheduler.schedulers.blocking import BlockingScheduler
 from dotenv import load_dotenv
 
-from generator import ContentGenerator, GeneratorError
+from generator import (
+    INVITATION_BIRTHDATE_LINES,
+    INVITATION_DETAIL_LINES,
+    ContentGenerator,
+    GeneratorError,
+)
 from image_processor import ImageProcessorError, compose_daily_invitation_image
 from publisher import SNSPublisher
 from responder import ReplyResponder, save_daily_state
@@ -34,10 +39,10 @@ def run_daily_fortune_job() -> None:
         logger.info("本日のテーマ: %s", theme)
 
         post_text = generator.build_daily_invitation_text(theme)
-        invitation_lines = generator.generate_daily_invitation_lines(theme)
+        top_lines = generator.generate_daily_invitation_top_lines(theme)
         card_path = generator.pick_cover_image()
         image_path = compose_daily_invitation_image(
-            card_path, invitation_lines["top_lines"], invitation_lines["bottom_lines"], OUTPUT_DIR
+            card_path, top_lines, INVITATION_BIRTHDATE_LINES, INVITATION_DETAIL_LINES, OUTPUT_DIR
         )
 
         auto_post_to_x = os.getenv("AUTO_POST_TO_X", "true").lower() == "true"

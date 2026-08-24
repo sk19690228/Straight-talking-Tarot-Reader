@@ -79,6 +79,19 @@ DAILY_INVITATION_TEMPLATE = (
     "タロット3枚とあなただけの辛口鑑定でお答えします🔮"
 )
 
+# 投稿画像の下段（入力案内）は、内容が案内文であり日替わりで変える必要がないため
+# 固定文にしている（上段のテーマ問いかけだけをGeminiが日替わりで生成する）。
+# 通常サイズの2行と、より小さいフォントで表示する3行に分かれる。
+INVITATION_BIRTHDATE_LINES = [
+    "まずは、あなたの生まれた日と",
+    "血液型を教えてちょうだい🔮",
+]
+INVITATION_DETAIL_LINES = [
+    "家族構成や過去の生い立ち・トラウマ",
+    "いま抱えている悩みも教えて頂戴",
+    "愛の深淵まで密に占ってあげるわよ",
+]
+
 READING_SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です。
 毒舌だが的確な指摘で知られるコメンテーター2人（歯に衣着せぬ女性コメンテーターと、
 論理的に矛盾を突く男性論客）が掛け合っているようなトーンで鑑定します。
@@ -116,20 +129,19 @@ INVITATION_SYSTEM_PROMPT = """あなたはSNSで人気の、自信家で色気�
 ペルソナです。「〜わよ」「〜しなさい」のような、はっきりした物言いの一人称で話します。
 ターゲット読者は30〜40代の、深い恋愛の悩みを抱える女性です。
 
-本日のお悩みテーマをもとに、投稿画像に載せる文章を、絵文字を多用して作成してください。
+本日のお悩みテーマをもとに、投稿画像の上段に載せる文章を、絵文字を使って作成してください。
+文中で「？」を使う場合は、必ずその直後で文を区切ってください（「？」の後にすぐ他の文言を
+続けない）。
 
 出力は必ず次の構造を持つJSONオブジェクトのみとします。前後に説明文やコードブロックの
 記号（```など）を一切付けないでください。
 {
   "top_lines": [
-    "1行目: 本日のお悩みテーマを、絵文字を多用しながら一目で刺さる形で提案する一文（全角24文字以内）",
+    "1行目: 本日のお悩みテーマを、絵文字を使いながら一目で刺さる形で提案する一文（全角24文字以内。
+      「？」を使う場合は文末に置く）",
     "2行目: 悩みがあれば私に相談してね、という趣旨の一文。前後に絵文字を配置する（全角20文字以内）",
-    "3行目: 神秘のトートタロットで占うわよ、という趣旨の一文。絵文字を連続で複数配置して装飾する（全角24文字以内）"
-  ],
-  "bottom_lines": [
-    "1行目: 最低限「生年月日」「血液型」を教えて、という趣旨の一文。末尾に絵文字を配置する（全角24文字以内）",
-    "2行目: さらに「家族構成」「生立ち」「過去のトラウマ」「具体的な悩み事」を教えてくれれば
-      より詳しく占える、という趣旨の一文。絵文字を多用する（全角60文字以内）"
+    "3行目: 神秘のトートタロットで占うわよ、という趣旨の一文。絵文字は1〜2個程度に控えめにし、
+      1行に収まる長さにする（全角18文字以内）"
   ]
 }
 """
@@ -177,17 +189,17 @@ class ContentGenerator:
             logger.exception("鑑定文生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
-    def generate_daily_invitation_lines(self, theme: str) -> dict:
-        """当日の投稿画像に載せる、絵文字を多用したテーマ問いかけ・入力案内の文章
-        （上段3行・下段2行）を生成する。"""
+    def generate_daily_invitation_top_lines(self, theme: str) -> list[str]:
+        """投稿画像の上段に載せる、テーマ問いかけの文章（3行）を生成する。
+        下段（入力案内）は日替わりで変える必要がないため固定文
+        （INVITATION_BIRTHDATE_LINES / INVITATION_DETAIL_LINES）を使う。"""
         user_content = f"本日のお悩みテーマ: {theme}"
         try:
             content = self._call_gemini_json_with_fallback(INVITATION_SYSTEM_PROMPT, user_content)
             top_lines = content.get("top_lines")
-            bottom_lines = content.get("bottom_lines")
-            if not top_lines or not bottom_lines:
-                raise GeneratorError("生成結果に'top_lines'または'bottom_lines'が含まれていません。")
-            return {"top_lines": top_lines, "bottom_lines": bottom_lines}
+            if not top_lines:
+                raise GeneratorError("生成結果に'top_lines'が含まれていません。")
+            return top_lines
         except GeneratorError:
             raise
         except Exception as exc:
