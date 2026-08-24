@@ -81,10 +81,9 @@ DAILY_INVITATION_TEMPLATE = (
 
 # 投稿画像の下段（入力案内）は、内容が案内文であり日替わりで変える必要がないため
 # 固定文にしている（上段のテーマ問いかけだけをGeminiが日替わりで生成する）。
-# 通常サイズの2行と、より小さいフォントで表示する3行に分かれる。
+# 通常サイズの1行と、より小さいフォントで表示する3行を、装飾的な区切り線で挟む。
 INVITATION_BIRTHDATE_LINES = [
-    "まずは、あなたの生まれた日と",
-    "血液型を教えてちょうだい🔮",
+    "あなたの「生年月日」「血液型」を教えてちょうだい🔮",
 ]
 INVITATION_DETAIL_LINES = [
     "家族構成や過去の生い立ち・トラウマ",
@@ -199,8 +198,10 @@ class ContentGenerator:
             logger.exception("鑑定文生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
-    def generate_daily_invitation_top_lines(self, theme: str) -> list[str]:
-        """投稿画像の上段に載せる、テーマ問いかけの文章（3行）を生成する。
+    def generate_daily_invitation_top_lines(self, theme: str) -> tuple[list[str], list[str]]:
+        """投稿画像の上段に載せる文章を生成する。戻り値は
+        (テーマの煽り文の行リスト, 相談を促す一言＋トートタロットの謳い文句の行リスト)。
+        画像上ではこの2ブロックの間に装飾的な区切り線を挟んで表示する。
         下段（入力案内）は日替わりで変える必要がないため固定文
         （INVITATION_BIRTHDATE_LINES / INVITATION_DETAIL_LINES）を使う。"""
         user_content = f"本日のお悩みテーマ: {theme}"
@@ -209,7 +210,9 @@ class ContentGenerator:
             top_lines = content.get("top_lines")
             if not top_lines:
                 raise GeneratorError("生成結果に'top_lines'が含まれていません。")
-            return self._stylize_theme_line(top_lines[0]) + top_lines[1:]
+            theme_lines = self._stylize_theme_line(top_lines[0])
+            cta_lines = top_lines[1:]
+            return theme_lines, cta_lines
         except GeneratorError:
             raise
         except Exception as exc:

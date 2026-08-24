@@ -39,10 +39,10 @@ def run_daily_fortune_job() -> None:
         logger.info("本日のテーマ: %s", theme)
 
         post_text = generator.build_daily_invitation_text(theme)
-        top_lines = generator.generate_daily_invitation_top_lines(theme)
+        theme_lines, cta_lines = generator.generate_daily_invitation_top_lines(theme)
         card_path = generator.pick_cover_image()
         image_path = compose_daily_invitation_image(
-            card_path, top_lines, INVITATION_BIRTHDATE_LINES, INVITATION_DETAIL_LINES, OUTPUT_DIR
+            card_path, theme_lines, cta_lines, INVITATION_BIRTHDATE_LINES, INVITATION_DETAIL_LINES, OUTPUT_DIR
         )
 
         auto_post_to_x = os.getenv("AUTO_POST_TO_X", "true").lower() == "true"

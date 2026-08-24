@@ -359,7 +359,12 @@ def _draw_atom_line(
 
 
 LINE_SPACING = 14
-BLOCK_GAP = 10  # 下段内の2ブロック(通常サイズ/小サイズ)の間隔
+BLOCK_GAP = 22  # ブロック(テキスト塊/区切り線)同士の間隔
+
+DIVIDER_HEIGHT = 14  # 区切り線が占める縦幅(中央の菱形装飾込み)
+DIVIDER_WIDTH_RATIO = 0.4
+DIVIDER_GAP = 26  # 区切り線の左右2本と中央の菱形の間隔
+DIVIDER_COLOR = (205, 178, 120, 220)
 
 
 class _TextBlock:
@@ -379,19 +384,58 @@ class _TextBlock:
         return len(self.wrapped) * self.line_height + (len(self.wrapped) - 1) * LINE_SPACING
 
 
-def _draw_text_block(overlay: Image.Image, draw: ImageDraw.ImageDraw, block: "_TextBlock", canvas_width: int, y: int) -> int:
-    """ブロックを描画し、描画後のyカーソル位置を返す。"""
-    for line_atoms in block.wrapped:
-        line_width = sum(_measure_atom(draw, t, e, block.jp_font, block.line_height) for t, e in line_atoms)
-        x = (canvas_width - line_width) // 2
-        _draw_atom_line(overlay, draw, line_atoms, x, y, block.jp_font, block.line_height, "white", 3, "black")
-        y += block.line_height + LINE_SPACING
+class _Divider:
+    """装飾的な細い区切り線（テキストブロックの間に挟む）。"""
+
+    height = DIVIDER_HEIGHT
+
+
+def _draw_divider(draw: ImageDraw.ImageDraw, canvas_width: int, y_center: int) -> None:
+    total_w = int(canvas_width * DIVIDER_WIDTH_RATIO)
+    seg_w = (total_w - DIVIDER_GAP) // 2
+    cx = canvas_width // 2
+    left_end = cx - DIVIDER_GAP // 2
+    left_start = left_end - seg_w
+    right_start = cx + DIVIDER_GAP // 2
+    right_end = right_start + seg_w
+    draw.line([(left_start, y_center), (left_end, y_center)], fill=DIVIDER_COLOR, width=2)
+    draw.line([(right_start, y_center), (right_end, y_center)], fill=DIVIDER_COLOR, width=2)
+    r = 5
+    draw.polygon(
+        [(cx, y_center - r), (cx + r, y_center), (cx, y_center + r), (cx - r, y_center)],
+        fill=DIVIDER_COLOR,
+    )
+
+
+def _segments_height(segments: list) -> int:
+    """_TextBlock/_Dividerを縦に並べたときの合計の高さ(間隔込み)を求める。"""
+    if not segments:
+        return 0
+    return sum(seg.height for seg in segments) + BLOCK_GAP * (len(segments) - 1)
+
+
+def _draw_segments(overlay: Image.Image, draw: ImageDraw.ImageDraw, canvas_width: int, y: int, segments: list) -> int:
+    """_TextBlock/_Dividerを縦に並べて描画し、描画後のyカーソル位置を返す。"""
+    for i, seg in enumerate(segments):
+        if isinstance(seg, _Divider):
+            _draw_divider(draw, canvas_width, y + seg.height // 2)
+            y += seg.height
+        else:
+            for line_atoms in seg.wrapped:
+                line_width = sum(_measure_atom(draw, t, e, seg.jp_font, seg.line_height) for t, e in line_atoms)
+                x = (canvas_width - line_width) // 2
+                _draw_atom_line(overlay, draw, line_atoms, x, y, seg.jp_font, seg.line_height, "white", 3, "black")
+                y += seg.line_height + LINE_SPACING
+            y -= LINE_SPACING
+        if i < len(segments) - 1:
+            y += BLOCK_GAP
     return y
 
 
 def compose_daily_invitation_image(
     card_path: str,
-    top_lines: list[str],
+    top_theme_lines: list[str],
+    top_cta_lines: list[str],
     bottom_lines: list[str],
     bottom_small_lines: list[str],
     output_dir: str,
@@ -400,8 +444,12 @@ def compose_daily_invitation_image(
     small_font_size: int = 36,
 ) -> str:
     """タロットカード1枚に、上段(テーマ問いかけ)・下段(入力案内)の文章を重ねた
-    投稿画像を作る。下段はさらに、通常サイズのbottom_linesと、より小さい
-    small_font_sizeで表示するbottom_small_linesの2ブロックに分かれる。
+    投稿画像を作る。
+
+    上段は、テーマの煽り文(top_theme_lines)と、相談を促す一言＋トートタロットの
+    謳い文句(top_cta_lines)の2ブロックを、装飾的な区切り線で挟んで縦に並べる。
+    下段も同様に、通常サイズのbottom_linesと、より小さいsmall_font_sizeで表示する
+    bottom_small_linesを区切り線で挟んで並べる。
     絵文字は日本語フォントとは別にカラー絵文字フォントで描画する。"""
     try:
         with Image.open(card_path) as img:
@@ -414,14 +462,20 @@ def compose_daily_invitation_image(
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        top_block = _TextBlock(draw, top_lines, jp_font, font_size, max_text_width)
+        top_theme_block = _TextBlock(draw, top_theme_lines, jp_font, font_size, max_text_width)
+        top_cta_block = _TextBlock(draw, top_cta_lines, jp_font, font_size, max_text_width)
         bottom_block = _TextBlock(draw, bottom_lines, jp_font, font_size, max_text_width)
         bottom_small_block = _TextBlock(draw, bottom_small_lines, jp_font_small, small_font_size, max_text_width)
 
-        top_band_top = int(CANVAS_SIZE[1] * 0.03)
-        top_band_height = top_block.height + BAND_PADDING_Y * 2
+        top_segments = [top_theme_block, _Divider(), top_cta_block]
+        bottom_segments = [bottom_block, _Divider(), bottom_small_block]
 
-        bottom_content_height = bottom_block.height + BLOCK_GAP + bottom_small_block.height
+        top_content_height = _segments_height(top_segments)
+        bottom_content_height = _segments_height(bottom_segments)
+
+        top_band_top = int(CANVAS_SIZE[1] * 0.03)
+        top_band_height = top_content_height + BAND_PADDING_Y * 2
+
         bottom_band_bottom = int(CANVAS_SIZE[1] * 0.97)
         bottom_band_height = bottom_content_height + BAND_PADDING_Y * 2
         bottom_band_top = bottom_band_bottom - bottom_band_height
@@ -429,13 +483,11 @@ def compose_daily_invitation_image(
         draw.rectangle([(0, top_band_top), (CANVAS_SIZE[0], top_band_top + top_band_height)], fill=BAND_COLOR)
         draw.rectangle([(0, bottom_band_top), (CANVAS_SIZE[0], bottom_band_bottom)], fill=BAND_COLOR)
 
-        y = top_band_top + (top_band_height - top_block.height) // 2
-        _draw_text_block(overlay, draw, top_block, CANVAS_SIZE[0], y)
+        y = top_band_top + (top_band_height - top_content_height) // 2
+        _draw_segments(overlay, draw, CANVAS_SIZE[0], y, top_segments)
 
         y = bottom_band_top + (bottom_band_height - bottom_content_height) // 2
-        y = _draw_text_block(overlay, draw, bottom_block, CANVAS_SIZE[0], y)
-        y += BLOCK_GAP - LINE_SPACING
-        _draw_text_block(overlay, draw, bottom_small_block, CANVAS_SIZE[0], y)
+        _draw_segments(overlay, draw, CANVAS_SIZE[0], y, bottom_segments)
 
         canvas = Image.alpha_composite(base, overlay).convert("RGB")
 
