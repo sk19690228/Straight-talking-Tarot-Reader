@@ -202,17 +202,83 @@ def _measure_atom(draw: ImageDraw.ImageDraw, atom_text: str, is_emoji: bool, jp_
 def _wrap_mixed_line(
     draw: ImageDraw.ImageDraw, text: str, jp_font: ImageFont.FreeTypeFont, line_height: int, max_width: int
 ) -> list[list[tuple[str, bool]]]:
-    """1行分のテキスト(日本語＋絵文字混在)を、max_widthに収まるよう複数行に折り返す。"""
-    lines: list[list[tuple[str, bool]]] = []
-    current: list[tuple[str, bool]] = []
+    """1行分のテキスト(日本語＋絵文字混在)を、max_widthに収まるよう複数行に折り返す。
+    2行以上になる場合は、単純に行末まで詰め込むと最後の行だけ極端に短くなりがちなため、
+    各行の幅ができるだけ揃うように区切り位置を調整する。"""
+    atoms = _atomize(text)
+    if not atoms:
+        return []
+    sized = [(t, e, _measure_atom(draw, t, e, jp_font, line_height)) for t, e in atoms]
+    total_width = sum(w for _, _, w in sized)
+    if total_width <= max_width:
+        return [[(t, e) for t, e, _w in sized]]
+
+    # 貪欲法で必要な最小行数を求める(バランス調整後の行数もこれに合わせる)
+    n_lines = 1
+    acc = 0
+    for _t, _e, w in sized:
+        if acc + w > max_width:
+            n_lines += 1
+            acc = w
+        else:
+            acc += w
+
+    balanced = _balanced_split(sized, n_lines, max_width)
+    return [[(t, e) for t, e, _w in line] for line in balanced]
+
+
+def _balanced_split(
+    sized: list[tuple[str, bool, int]], n_lines: int, max_width: int
+) -> list[list[tuple[str, bool, int]]]:
+    """sized(各要素は(text, is_emoji, width))を、幅のバランスが取れたn_lines行に分割する。
+    どの行もmax_widthに収まる分割にならなかった場合は、単純な貪欲法にフォールバックする。"""
+    total_width = sum(w for _, _, w in sized)
+    target = total_width / n_lines
+
+    cumulative: list[int] = []
+    running = 0
+    for _t, _e, w in sized:
+        running += w
+        cumulative.append(running)
+
+    break_after: list[int] = []
+    search_start = 0
+    for line_no in range(1, n_lines):
+        ideal = target * line_no
+        reserved_for_rest = n_lines - line_no  # 残りの行に最低1要素ずつ残す
+        upper = len(cumulative) - reserved_for_rest
+        best_idx = search_start
+        best_diff = abs(cumulative[search_start] - ideal)
+        for idx in range(search_start + 1, upper):
+            diff = abs(cumulative[idx] - ideal)
+            if diff <= best_diff:
+                best_diff = diff
+                best_idx = idx
+        break_after.append(best_idx)
+        search_start = best_idx + 1
+
+    lines: list[list[tuple[str, bool, int]]] = []
+    prev = 0
+    for idx in break_after:
+        lines.append(sized[prev : idx + 1])
+        prev = idx + 1
+    lines.append(sized[prev:])
+
+    if any(sum(w for _t, _e, w in line) > max_width for line in lines):
+        return _greedy_split(sized, max_width)
+    return lines
+
+
+def _greedy_split(sized: list[tuple[str, bool, int]], max_width: int) -> list[list[tuple[str, bool, int]]]:
+    lines: list[list[tuple[str, bool, int]]] = []
+    current: list[tuple[str, bool, int]] = []
     current_width = 0
-    for atom_text, is_emoji in _atomize(text):
-        w = _measure_atom(draw, atom_text, is_emoji, jp_font, line_height)
+    for t, e, w in sized:
         if current and current_width + w > max_width:
             lines.append(current)
             current = []
             current_width = 0
-        current.append((atom_text, is_emoji))
+        current.append((t, e, w))
         current_width += w
     if current:
         lines.append(current)
