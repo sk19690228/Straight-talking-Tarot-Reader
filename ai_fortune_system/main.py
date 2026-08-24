@@ -7,6 +7,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from dotenv import load_dotenv
 
 from generator import ContentGenerator, GeneratorError
+from image_processor import ImageProcessorError, compose_daily_invitation_image
 from publisher import SNSPublisher
 from responder import ReplyResponder, save_daily_state
 
@@ -33,7 +34,11 @@ def run_daily_fortune_job() -> None:
         logger.info("本日のテーマ: %s", theme)
 
         post_text = generator.build_daily_invitation_text(theme)
-        image_path = generator.pick_cover_image()
+        invitation_lines = generator.generate_daily_invitation_lines(theme)
+        card_path = generator.pick_cover_image()
+        image_path = compose_daily_invitation_image(
+            card_path, invitation_lines["top_lines"], invitation_lines["bottom_lines"], OUTPUT_DIR
+        )
 
         auto_post_to_x = os.getenv("AUTO_POST_TO_X", "true").lower() == "true"
         results = SNSPublisher().publish_all(image_path, post_text, post_to_x=auto_post_to_x)
@@ -55,7 +60,7 @@ def run_daily_fortune_job() -> None:
             logger.info("  python3 register_tweet_id.py <ツイートID>")
         elif not results.get("x_tweet_id"):
             logger.warning("Xへの自動投稿に失敗しました。リプライ自動応答は無効のままです。")
-    except GeneratorError:
+    except (GeneratorError, ImageProcessorError):
         logger.exception("コンテンツ生成中にエラーが発生したため、本日のジョブを中止します。")
     except Exception:
         logger.exception("日次ジョブで予期しないエラーが発生しました。")

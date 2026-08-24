@@ -21,6 +21,24 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Japanese + emoji fonts
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          ok=0
+          for i in 1 2; do
+            if timeout 60 sudo apt-get update -qq && timeout 120 sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji; then
+              ok=1
+              break
+            fi
+            echo "::warning::apt-get attempt $i failed or timed out, retrying..."
+            sleep 5
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::warning::Could not install fonts after retries; the invitation image will fall back to a non-Japanese font / no emoji."
+          fi
+
       - name: Install dependencies
         working-directory: ai_fortune_system
         run: pip install -r requirements.txt

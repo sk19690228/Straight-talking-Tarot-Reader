@@ -112,6 +112,28 @@ READING_SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い�
 }
 """
 
+INVITATION_SYSTEM_PROMPT = """あなたはSNSで人気の、自信家で色気のある女性タロット占い師の
+ペルソナです。「〜わよ」「〜しなさい」のような、はっきりした物言いの一人称で話します。
+ターゲット読者は30〜40代の、深い恋愛の悩みを抱える女性です。
+
+本日のお悩みテーマをもとに、投稿画像に載せる文章を、絵文字を多用して作成してください。
+
+出力は必ず次の構造を持つJSONオブジェクトのみとします。前後に説明文やコードブロックの
+記号（```など）を一切付けないでください。
+{
+  "top_lines": [
+    "1行目: 本日のお悩みテーマを、絵文字を多用しながら一目で刺さる形で提案する一文（全角24文字以内）",
+    "2行目: 悩みがあれば私に相談してね、という趣旨の一文。前後に絵文字を配置する（全角20文字以内）",
+    "3行目: 神秘のトートタロットで占うわよ、という趣旨の一文。絵文字を連続で複数配置して装飾する（全角24文字以内）"
+  ],
+  "bottom_lines": [
+    "1行目: 最低限「生年月日」「血液型」を教えて、という趣旨の一文。末尾に絵文字を配置する（全角24文字以内）",
+    "2行目: さらに「家族構成」「生立ち」「過去のトラウマ」「具体的な悩み事」を教えてくれれば
+      より詳しく占える、という趣旨の一文。絵文字を多用する（全角60文字以内）"
+  ]
+}
+"""
+
 
 class GeneratorError(Exception):
     """コンテンツ生成処理に関するエラー。"""
@@ -138,22 +160,13 @@ class ContentGenerator:
     def generate_personal_reading(self, theme: str, user_message: str, card_names: list[str]) -> str:
         """お悩みテーマ・読者の自由記述（生年月日・血液型・家族構成など）・引かれたタロット
         3枚から、個別分析を反映した辛口の占い＆アドバイス文を1本生成する。"""
+        user_content = (
+            f"本日のお悩みテーマ: {theme}\n"
+            f"引かれたタロットカード（3枚、提示順）: {'、'.join(card_names)}\n"
+            f"読者からのメッセージ:\n{user_message}"
+        )
         try:
-            try:
-                content = self._call_gemini_reading(TEXT_MODEL, theme, user_message, card_names)
-            except _ModelNotFoundError as exc:
-                # Geminiのモデル名は時間の経過で変わることがある(実際に
-                # gemini-2.0-flashが404になるケースを確認済み)。404のエラー
-                # メッセージ自体に後継モデル名(例: "use models/gemini-3.6-flash")
-                # が含まれていることが多いのでまずそれを使い、含まれていない
-                # 場合のみモデル一覧からプレビュー版を避けて自動選定する。
-                fallback_model = self._extract_suggested_model(str(exc)) or self._discover_fallback_model()
-                logger.warning(
-                    "モデル '%s' が見つからなかったため、'%s' にフォールバックします。",
-                    TEXT_MODEL,
-                    fallback_model,
-                )
-                content = self._call_gemini_reading(fallback_model, theme, user_message, card_names)
+            content = self._call_gemini_json_with_fallback(READING_SYSTEM_PROMPT, user_content)
             reading = content.get("reading")
             if not reading:
                 raise GeneratorError("生成結果に'reading'が含まれていません。")
@@ -164,15 +177,44 @@ class ContentGenerator:
             logger.exception("鑑定文生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
-    def _call_gemini_reading(self, model: str, theme: str, user_message: str, card_names: list[str]) -> dict:
-        user_content = (
-            f"本日のお悩みテーマ: {theme}\n"
-            f"引かれたタロットカード（3枚、提示順）: {'、'.join(card_names)}\n"
-            f"読者からのメッセージ:\n{user_message}"
-        )
+    def generate_daily_invitation_lines(self, theme: str) -> dict:
+        """当日の投稿画像に載せる、絵文字を多用したテーマ問いかけ・入力案内の文章
+        （上段3行・下段2行）を生成する。"""
+        user_content = f"本日のお悩みテーマ: {theme}"
+        try:
+            content = self._call_gemini_json_with_fallback(INVITATION_SYSTEM_PROMPT, user_content)
+            top_lines = content.get("top_lines")
+            bottom_lines = content.get("bottom_lines")
+            if not top_lines or not bottom_lines:
+                raise GeneratorError("生成結果に'top_lines'または'bottom_lines'が含まれていません。")
+            return {"top_lines": top_lines, "bottom_lines": bottom_lines}
+        except GeneratorError:
+            raise
+        except Exception as exc:
+            logger.exception("投稿画像用の文章生成中にエラーが発生しました")
+            raise GeneratorError(str(exc)) from exc
+
+    def _call_gemini_json_with_fallback(self, system_prompt: str, user_content: str) -> dict:
+        try:
+            return self._call_gemini_json(TEXT_MODEL, system_prompt, user_content)
+        except _ModelNotFoundError as exc:
+            # Geminiのモデル名は時間の経過で変わることがある(実際に
+            # gemini-2.0-flashが404になるケースを確認済み)。404のエラー
+            # メッセージ自体に後継モデル名(例: "use models/gemini-3.6-flash")
+            # が含まれていることが多いのでまずそれを使い、含まれていない
+            # 場合のみモデル一覧からプレビュー版を避けて自動選定する。
+            fallback_model = self._extract_suggested_model(str(exc)) or self._discover_fallback_model()
+            logger.warning(
+                "モデル '%s' が見つからなかったため、'%s' にフォールバックします。",
+                TEXT_MODEL,
+                fallback_model,
+            )
+            return self._call_gemini_json(fallback_model, system_prompt, user_content)
+
+    def _call_gemini_json(self, model: str, system_prompt: str, user_content: str) -> dict:
         url = GEMINI_ENDPOINT_TEMPLATE.format(model=model)
         payload = {
-            "system_instruction": {"parts": [{"text": READING_SYSTEM_PROMPT}]},
+            "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_content}]}],
             "generationConfig": {
                 "temperature": 0.9,
