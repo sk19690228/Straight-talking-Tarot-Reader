@@ -1,0 +1,41 @@
+name: Smoke Test Reading (no X)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ai_fortune_system
+        run: pip install -r requirements.txt
+
+      - name: Generate a sample personal reading (Gemini + tarot image, no X calls)
+        working-directory: ai_fortune_system
+        timeout-minutes: 5
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 scripts/smoke_test_reading.py
+
+      - name: Commit result
+        working-directory: ai_fortune_system
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p state
+          git add state/smoke_test_reading.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Add smoke test reading result [skip ci]"
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push
