@@ -1,70 +1,49 @@
-"""Xのメンション監視・2段階分岐（Q1→Q2→最終診断）の自動返信ロジック。
+"""Xの返信監視・個別タロット鑑定の自動返信ロジック。
 
 流れ:
-  Q1（当日の投稿）へ A/B で返信
-    -> Q2-A または Q2-B を画像付きでリプライ（この時点でθ/δ or η/φのどちらかに
-       進んでいるが、読者への指示は常に「A」「B」の1文字）
-  そのQ2への返信 A/B
-    -> 4パターン（A→θ, A→δ, B→η, B→φ）のいずれかの最終診断をリプライ
+  当日の投稿（テーマ確認＋生年月日・血液型・家族構成の入力依頼）への直接リプライを
+  検知するたびに、タロットカード3枚をランダムに選んで1枚の画像に合成し、
+  返信内容（生年月日・血液型・家族構成など自由記述）とお悩みテーマを踏まえた
+  個別の辛口鑑定文を生成して、画像付きで返信する。
 """
 
 import base64
 import json
 import logging
 import os
-import re
 import tempfile
 
 import tweepy
+
+from generator import ContentGenerator, GeneratorError
+from image_processor import ImageProcessorError, compose_three_card_image
 
 logger = logging.getLogger(__name__)
 
 STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DAILY_STATE_PATH = os.path.join(STATE_DIR, "daily_fortune.json")
 SINCE_ID_PATH = os.path.join(STATE_DIR, "since_id.json")
-
-# 全角/半角・大文字小文字を問わず「A」「B」単体の返信のみを回答として扱う。
-# Xはリプライ時に "@元ツイート主 " を本文の先頭に自動付与するため、
-# 先頭の@メンション（複数可）は許容しつつ、それ以外の文字が混じる場合は除外する。
-ANSWER_PATTERN = re.compile(r"^\s*(?:[@＠][^\s@＠]+\s+)*([AaＡａ]|[BbＢｂ])\s*$")
+LAST_READING_PATH = os.path.join(STATE_DIR, "last_reading.json")
+OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
 
 class ResponderError(Exception):
     """リプライ監視・自動返信処理に関するエラー。"""
 
 
-def save_daily_state(
-    tweet_id: str | None,
-    content: dict,
-    theme: str,
-    level1_image_bytes: bytes,
-    level2_a_image_bytes: bytes,
-    level2_b_image_bytes: bytes,
-    results_images: dict[str, bytes],
-) -> None:
-    """当日の分岐コンテンツ一式（Q1/Q2/最終診断・各画像）を保存する。
+def save_daily_state(tweet_id: str | None, theme: str, post_text: str, cover_image_bytes: bytes) -> None:
+    """当日のお悩みテーマ・投稿文・表紙画像を保存する。
 
-    level1_image_bytesはQ1の合成画像そのもの。GitHub Actionsの実行ログ・
-    Artifactsを経由しなくても、リポジトリにコミットされたこの状態ファイルから
-    直接デコードして画像を取り出せるようにするために保存する。
-    results_imagesは最終診断4パターン(a_theta/a_delta/b_eta/b_phi)それぞれに
-    添えるタロットカード画像1枚ずつ。
+    cover_image_bytesは、GitHub Actionsの実行ログ・Artifactsを経由しなくても、
+    リポジトリにコミットされたこの状態ファイルから直接デコードして画像を
+    取り出せるようにするために保存する。
     """
     os.makedirs(STATE_DIR, exist_ok=True)
     data = {
         "tweet_id": tweet_id,
         "theme": theme,
-        "level1": content["level1"],
-        "level2_a": content["level2_a"],
-        "level2_b": content["level2_b"],
-        "results": content["results"],
-        "level1_image_b64": base64.b64encode(level1_image_bytes).decode("ascii"),
-        "level2_a_image_b64": base64.b64encode(level2_a_image_bytes).decode("ascii"),
-        "level2_b_image_b64": base64.b64encode(level2_b_image_bytes).decode("ascii"),
-        "results_images_b64": {
-            key: base64.b64encode(image_bytes).decode("ascii") for key, image_bytes in results_images.items()
-        },
-        "level2_threads": {},
+        "post_text": post_text,
+        "cover_image_b64": base64.b64encode(cover_image_bytes).decode("ascii"),
     }
     with open(DAILY_STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -93,6 +72,30 @@ def _save_since_id(since_id: str) -> None:
         json.dump({"since_id": since_id}, f)
 
 
+def _save_last_reading(
+    reply_tweet_id: str,
+    username: str,
+    user_message: str,
+    card_names: list[str],
+    reading_text: str,
+    image_bytes: bytes,
+) -> None:
+    """直近1件分の個別鑑定結果（画像込み）を保存する。GitHub Actions Artifactsを
+    経由しなくても、コミット済みのこの状態ファイルから直接画像を取り出せるように
+    するため（リポジトリの肥大化を避けるため、保持するのは直近1件のみ）。"""
+    os.makedirs(STATE_DIR, exist_ok=True)
+    data = {
+        "reply_tweet_id": reply_tweet_id,
+        "username": username,
+        "user_message": user_message,
+        "card_names": card_names,
+        "reading_text": reading_text,
+        "image_b64": base64.b64encode(image_bytes).decode("ascii"),
+    }
+    with open(LAST_READING_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 class ReplyResponder:
     def __init__(self):
         self._client = tweepy.Client(
@@ -102,6 +105,7 @@ class ReplyResponder:
             access_token=os.getenv("X_ACCESS_TOKEN"),
             access_token_secret=os.getenv("X_ACCESS_TOKEN_SECRET"),
         )
+        self._generator = ContentGenerator()
 
     def _post_reply(self, in_reply_to_id: str, text: str, image_bytes: bytes | None = None) -> str | None:
         """テキスト（＋任意で画像）をリプライとして投稿し、新しいツイートIDを返す。"""
@@ -123,14 +127,8 @@ class ReplyResponder:
         response = self._client.create_tweet(text=text, in_reply_to_tweet_id=in_reply_to_id, media_ids=media_ids)
         return response.data["id"]
 
-    def _build_level2_reply_text(self, username: str, question: str) -> str:
-        return f"@{username} {question}"
-
-    def _build_final_reply_text(self, username: str, result: str) -> str:
-        return f"@{username} {result}"
-
     def check_and_respond(self) -> None:
-        """メンションを確認し、Q1→Q2→最終診断の2段階分岐で自動返信する。"""
+        """当日の投稿への直接リプライを確認し、タロット3枚＋辛口鑑定文で自動返信する。"""
         daily_state = _load_json(DAILY_STATE_PATH)
         if not daily_state:
             logger.info("本日の鑑定データが未登録のため、リプライ確認をスキップします。")
@@ -170,9 +168,8 @@ class ReplyResponder:
 
         # get_users_mentions は本文中に「@ユーザー名」が明示的に含まれるツイートしか
         # 拾えない。Xの返信UIは現在、本文に@メンションを自動挿入しないため、
-        # 「A」とだけ書かれたような返信は上記だけでは検知できない。そのため、
-        # 当日の投稿(Q1)のconversation_id配下の返信を直接検索して補完する
-        # (Q1→Q2→最終診断は同じ返信スレッドなので、1回の検索で両方拾える)。
+        # 本文だけの返信は上記だけでは検知できない。そのため、当日の投稿の
+        # conversation_id配下の返信を直接検索して補完する。
         try:
             conversation = self._client.search_recent_tweets(
                 query=f"conversation_id:{daily_state['tweet_id']} -from:{me.username}",
@@ -197,61 +194,44 @@ class ReplyResponder:
             return
 
         mention_list = sorted(replies_by_id.values(), key=lambda t: int(t.id))
-        level2_threads: dict = daily_state.get("level2_threads", {})
-        state_changed = False
         latest_processed_id = since_id
 
         for mention in mention_list:
             latest_processed_id = mention.id
 
-            match = ANSWER_PATTERN.match(mention.text or "")
-            if not match:
-                continue
-            answer = match.group(1).upper()
-
             referenced = mention.referenced_tweets or []
             replied_to_ids = {str(ref.id) for ref in referenced if ref.type == "replied_to"}
-            username = users_by_id.get(mention.author_id).username if mention.author_id in users_by_id else "あなた"
-
-            if str(daily_state["tweet_id"]) in replied_to_ids:
-                # Q1への回答 -> Q2-A または Q2-B を画像付きで返信
-                branch = "A" if answer == "A" else "B"
-                level2 = daily_state["level2_a"] if branch == "A" else daily_state["level2_b"]
-                image_b64 = daily_state["level2_a_image_b64"] if branch == "A" else daily_state["level2_b_image_b64"]
-                try:
-                    reply_text = self._build_level2_reply_text(username, level2["question"])
-                    new_tweet_id = self._post_reply(mention.id, reply_text, base64.b64decode(image_b64))
-                    if new_tweet_id:
-                        level2_threads[new_tweet_id] = branch
-                        state_changed = True
-                    logger.info("Q2への自動返信に成功しました: mention_id=%s branch=%s", mention.id, branch)
-                except Exception:
-                    logger.exception("Q2への自動返信に失敗しました: mention_id=%s", mention.id)
+            if str(daily_state["tweet_id"]) not in replied_to_ids:
+                # 当日の投稿への直接リプライのみを鑑定対象にする
+                # （bot自身の返信へのさらなる返信などは対象外）。
                 continue
 
-            matched_branch = next((level2_threads[ref_id] for ref_id in replied_to_ids if ref_id in level2_threads), None)
-            if matched_branch is None:
+            user_message = (mention.text or "").strip()
+            if not user_message:
                 continue
 
-            # Q2への回答 -> 4パターンの最終診断を返信
-            if matched_branch == "A":
-                result_key = "a_theta" if answer == "A" else "a_delta"
-            else:
-                result_key = "b_eta" if answer == "A" else "b_phi"
+            username = users_by_id[mention.author_id].username if mention.author_id in users_by_id else "あなた"
 
             try:
-                reply_text = self._build_final_reply_text(username, daily_state["results"][result_key])
-                result_image_b64 = daily_state.get("results_images_b64", {}).get(result_key)
-                result_image_bytes = base64.b64decode(result_image_b64) if result_image_b64 else None
-                self._post_reply(mention.id, reply_text, result_image_bytes)
-                logger.info("最終診断の自動返信に成功しました: mention_id=%s result=%s", mention.id, result_key)
-            except Exception:
-                logger.exception("最終診断の自動返信に失敗しました: mention_id=%s", mention.id)
+                cards = self._generator.pick_three_cards()
+                card_paths = [path for path, _name in cards]
+                card_names = [name for _path, name in cards]
+                image_path = compose_three_card_image(card_paths, OUTPUT_DIR)
+                reading_text = self._generator.generate_personal_reading(
+                    daily_state["theme"], user_message, card_names
+                )
+                reply_text = f"@{username} {reading_text}"
 
-        if state_changed:
-            daily_state["level2_threads"] = level2_threads
-            with open(DAILY_STATE_PATH, "w", encoding="utf-8") as f:
-                json.dump(daily_state, f, ensure_ascii=False, indent=2)
+                with open(image_path, "rb") as f:
+                    image_bytes = f.read()
+
+                self._post_reply(mention.id, reply_text, image_bytes)
+                _save_last_reading(mention.id, username, user_message, card_names, reading_text, image_bytes)
+                logger.info("個別鑑定の自動返信に成功しました: mention_id=%s", mention.id)
+            except (GeneratorError, ImageProcessorError):
+                logger.exception("個別鑑定の生成に失敗しました: mention_id=%s", mention.id)
+            except Exception:
+                logger.exception("個別鑑定の自動返信に失敗しました: mention_id=%s", mention.id)
 
         if latest_processed_id:
             _save_since_id(latest_processed_id)

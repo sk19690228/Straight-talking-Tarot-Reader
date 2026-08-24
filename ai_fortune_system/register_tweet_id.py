@@ -3,7 +3,7 @@
 使い方: python3 register_tweet_id.py <ツイートID>
 
 登録すると、main.pyのリプライ確認ジョブ（run_reply_check_job）が
-そのツイートへのA/Bリプライを検知して自動返信できるようになる。
+そのツイートへの返信を検知して個別鑑定を自動返信できるようになる。
 """
 
 import sys

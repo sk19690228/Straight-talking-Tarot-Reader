@@ -3,11 +3,15 @@
 OpenAI APIには依存しない構成です。
 - 文章生成: Google Gemini API（無料枠あり）
 - 画像: 毎回AIで生成せず、あらかじめ用意した静的テンプレート素材
-  （assets/templates/positive, negative。scripts/generate_templates.pyで生成済み）
-  からランダムに選ぶだけなので、画像生成コストは一切かかりません。
+  （assets/templates/positive, negative。大アルカナ22枚）からランダムに選ぶ・
+  組み合わせるだけなので、画像生成コストは一切かかりません。
 
-2段階分岐（Q1: A/B → Q2: θ/δ または η/φ → 最終診断）のコンテンツ一式を
-1回のAPI呼び出しで生成する。
+流れ:
+  1. 当日のお悩みテーマを問いかけ、生年月日・血液型・家族構成の入力を促す投稿を作る
+     （build_daily_invitation_text。Gemini呼び出し不要のテンプレート文）。
+  2. その投稿への返信ごとに、タロットカード3枚をランダムに選び（pick_three_cards）、
+     返信内容（生年月日・血液型・家族構成など自由記述）とテーマを踏まえた
+     個別の辛口鑑定文を1本生成する（generate_personal_reading）。
 """
 
 import json
@@ -39,7 +43,43 @@ DAILY_THEMES = [
     "好きな人に告白すべきか、諦めるべきか",
 ]
 
-SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です。
+# 大アルカナ22枚のスラッグ -> 鑑定文生成の材料として使う日本語名。
+# 画像自体（assets/templates配下）には英語名が描き込まれているが、
+# 鑑定文の生成にはこちらの伝統的な日本語名を使う。
+CARD_DISPLAY_NAMES = {
+    "the_fool": "愚者",
+    "the_magician": "魔術師",
+    "the_high_priestess": "女教皇",
+    "the_empress": "女帝",
+    "the_emperor": "皇帝",
+    "the_hierophant": "教皇",
+    "the_lovers": "恋人",
+    "the_chariot": "戦車",
+    "strength": "力",
+    "the_hermit": "隠者",
+    "wheel_of_fortune": "運命の輪",
+    "justice": "正義",
+    "the_hanged_man": "吊るされた男",
+    "death": "死神",
+    "temperance": "節制",
+    "the_devil": "悪魔",
+    "the_tower": "塔",
+    "the_star": "星",
+    "the_moon": "月",
+    "the_sun": "太陽",
+    "judgement": "審判",
+    "the_world": "世界",
+}
+
+DAILY_INVITATION_TEMPLATE = (
+    "【本日のお悩み診断】\n"
+    "{theme}\n\n"
+    "気になる方は、このポストに「生年月日・血液型・家族構成」をリプライで教えてください。\n"
+    "家族構成は、親兄弟、生立ち、過去のトラウマなどの情報を入力すれば、より詳細に占えます。\n"
+    "タロット3枚とあなただけの辛口鑑定でお答えします🔮"
+)
+
+READING_SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です。
 毒舌だが的確な指摘で知られるコメンテーター2人（歯に衣着せぬ女性コメンテーターと、
 論理的に矛盾を突く男性論客）が掛け合っているようなトーンで鑑定します。
 ターゲット読者は30〜40代の女性です。人格否定はせず、あくまで「耳の痛いけど納得できる」
@@ -54,54 +94,21 @@ SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い師です�
 - 課金・個別鑑定への誘導や、繰り返し読ませることを目的とした言葉選びをしない
 - あくまで現実を直視させる辛口な指摘に徹する（他のテーマと同じトーン・厳しさで扱う）
 
-【全体構成】
-今回は、Q1への回答に応じてさらに深掘りしたQ2を出し分ける、2段階の分岐鑑定を作成します。
+読者から、本日のお悩みテーマに対して「生年月日・血液型・家族構成（親兄弟、生立ち、
+過去のトラウマなど）」を書いた自由記述のメッセージが届く。そこから読み取れる情報
+（年齢のおおよその見当・血液型・家族背景や生立ち）を、個人が特定されない範囲で
+分析材料として活用し、精神分析的な視点も交えた鑑定をする。記載が不十分・不明瞭な
+項目があっても構わず、書かれている情報の範囲で鑑定すること（欠けている情報を
+指摘したり、再入力を求めたりしない）。
 
-- Q1: 本日のお悩みテーマについての「問いかけ」。
-  選択肢A（前向き・希望を持てる側）、選択肢B（厳しい現実を直視する側）。
-- Q1でAと答えた人には、Aの選択をさらに深掘りするQ2-Aを出す。
-  選択肢θ（シータ。Aの中でもさらに前向きに踏み込む側）、
-  選択肢δ（デルタ。Aを選んだはずなのに不安がふと顔を出す側）。
-- Q1でBと答えた人には、Bの選択をさらに深掘りするQ2-Bを出す。
-  選択肢η（イータ。Bの中に一筋の希望が見える側）、
-  選択肢φ（ファイ。Bの中でさらに厳しい現実を突きつけられる側）。
-- 最終的な組み合わせ（A→θ、A→δ、B→η、B→φ）ごとに、精神分析の視点も交えた
-  辛口の占い＆アドバイス文を作成する。Q1・Q2はどちらも「Aへは『A』、
-  該当の選択肢へは『B』とリプライしてね」という形式で読者に促すこと
-  （実際の返信は常に「A」または「B」の1文字。θ/δ/η/φはあなたが内部で
-  区別するための名称であり、読者に見せる返信の指示は必ずA/Bにする）。
+引かれたタロットカード3枚（提示された順）の伝統的な意味も踏まえ、今回のお悩みに対する
+辛口の占い＆アドバイスをまとめる。
 
 出力は必ず次の構造を持つJSONオブジェクトのみとします。前後に説明文やコードブロックの
 記号（```など）を一切付けないでください。
 {
-  "level1": {
-    "question": "Q1の投稿本文（120文字以内。Aへは『A』、Bへは『B』とリプライするよう
-      促す一文を含める。絵文字は控えめに1〜2個まで）",
-    "catchphrase": "Q1の画像最上部に載せる短いキャッチコピー。抽象的な言い回しは避け、
-      悩みの具体的な状況が一目で伝わる言い回しにする（全角28文字以内）",
-    "option_a_label": "選択肢Aの短い見出し（前向きな選択、10文字以内）",
-    "option_b_label": "選択肢Bの短い見出し（厳しい現実を選ぶ側、10文字以内）"
-  },
-  "level2_a": {
-    "question": "Q1でAと答えた人へのリプライ本文（Aをさらに深掘りする問いかけ、
-      100文字以内。θへは『A』、δへは『B』とリプライするよう促す一文を含める）",
-    "catchphrase": "Q2-Aの画像最上部に載せる短いキャッチコピー（全角28文字以内）",
-    "option_theta_label": "選択肢θの短い見出し（Aの中でもさらに前向きな選択、10文字以内）",
-    "option_delta_label": "選択肢δの短い見出し（Aの中で不安が顔を出す選択、10文字以内）"
-  },
-  "level2_b": {
-    "question": "Q1でBと答えた人へのリプライ本文（Bをさらに深掘りする問いかけ、
-      100文字以内。ηへは『A』、φへは『B』とリプライするよう促す一文を含める）",
-    "catchphrase": "Q2-Bの画像最上部に載せる短いキャッチコピー（全角28文字以内）",
-    "option_eta_label": "選択肢ηの短い見出し（Bの中に一筋の希望が見える選択、10文字以内）",
-    "option_phi_label": "選択肢φの短い見出し（Bの中でさらに厳しい現実を選ぶ、10文字以内）"
-  },
-  "results": {
-    "a_theta": "A→θと進んだ人向けの、精神分析的な視点を交えた辛口の占い＆アドバイス文（180文字以内）",
-    "a_delta": "A→δと進んだ人向けの、同様の辛口アドバイス文（180文字以内）",
-    "b_eta": "B→ηと進んだ人向けの、同様の辛口アドバイス文（180文字以内）",
-    "b_phi": "B→φと進んだ人向けの、同様の辛口アドバイス文（180文字以内）"
-  }
+  "reading": "リプライ本文（220文字以内。辛口だが読了感のある占い＆アドバイス文。
+    絵文字は控えめに0〜2個まで）"
 }
 """
 
@@ -123,12 +130,17 @@ class ContentGenerator:
     def pick_daily_theme(self) -> str:
         return random.choice(DAILY_THEMES)
 
-    def generate_branching_content(self, theme: str) -> dict:
-        """お悩みテーマから、Q1(A/B)→Q2(θ/δ または η/φ)→最終診断4パターンの
-        コンテンツ一式を生成する。"""
+    def build_daily_invitation_text(self, theme: str) -> str:
+        """当日のお悩みテーマを問いかけ、生年月日・血液型・家族構成の入力を促す投稿文を作る。
+        Gemini呼び出しは不要（毎回同じ定型文にテーマだけ差し込む）。"""
+        return DAILY_INVITATION_TEMPLATE.format(theme=theme)
+
+    def generate_personal_reading(self, theme: str, user_message: str, card_names: list[str]) -> str:
+        """お悩みテーマ・読者の自由記述（生年月日・血液型・家族構成など）・引かれたタロット
+        3枚から、個別分析を反映した辛口の占い＆アドバイス文を1本生成する。"""
         try:
             try:
-                content = self._call_gemini(TEXT_MODEL, theme)
+                content = self._call_gemini_reading(TEXT_MODEL, theme, user_message, card_names)
             except _ModelNotFoundError as exc:
                 # Geminiのモデル名は時間の経過で変わることがある(実際に
                 # gemini-2.0-flashが404になるケースを確認済み)。404のエラー
@@ -141,22 +153,27 @@ class ContentGenerator:
                     TEXT_MODEL,
                     fallback_model,
                 )
-                content = self._call_gemini(fallback_model, theme)
-            self._validate_branching_content(content)
-            return content
+                content = self._call_gemini_reading(fallback_model, theme, user_message, card_names)
+            reading = content.get("reading")
+            if not reading:
+                raise GeneratorError("生成結果に'reading'が含まれていません。")
+            return reading
         except GeneratorError:
             raise
         except Exception as exc:
-            logger.exception("文章生成中にエラーが発生しました")
+            logger.exception("鑑定文生成中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
 
-    def _call_gemini(self, model: str, theme: str) -> dict:
+    def _call_gemini_reading(self, model: str, theme: str, user_message: str, card_names: list[str]) -> dict:
+        user_content = (
+            f"本日のお悩みテーマ: {theme}\n"
+            f"引かれたタロットカード（3枚、提示順）: {'、'.join(card_names)}\n"
+            f"読者からのメッセージ:\n{user_message}"
+        )
         url = GEMINI_ENDPOINT_TEMPLATE.format(model=model)
         payload = {
-            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "contents": [
-                {"role": "user", "parts": [{"text": f"本日のお悩みテーマ: {theme}"}]}
-            ],
+            "system_instruction": {"parts": [{"text": READING_SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
             "generationConfig": {
                 "temperature": 0.9,
                 "responseMimeType": "application/json",
@@ -202,47 +219,41 @@ class ContentGenerator:
         flash_pool.sort(reverse=True)
         return flash_pool[0]
 
-    @staticmethod
-    def _validate_branching_content(content: dict) -> None:
-        required_structure = {
-            "level1": {"question", "catchphrase", "option_a_label", "option_b_label"},
-            "level2_a": {"question", "catchphrase", "option_theta_label", "option_delta_label"},
-            "level2_b": {"question", "catchphrase", "option_eta_label", "option_phi_label"},
-            "results": {"a_theta", "a_delta", "b_eta", "b_phi"},
-        }
-        for section, keys in required_structure.items():
-            if section not in content:
-                raise GeneratorError(f"生成結果に必須セクションが不足しています: {section}")
-            missing = keys - content[section].keys()
-            if missing:
-                raise GeneratorError(f"生成結果の'{section}'に必須キーが不足しています: {missing}")
-
-    def generate_pair_images(
-        self,
-        positive_label: str,
-        negative_label: str,
-        output_dir: str,
-        suffix_prefix: str,
-    ) -> tuple[str, str]:
-        """前向き・厳しい現実を対比的に表すタロット風画像を、静的テンプレート素材から
-        1枚ずつランダムに選んで返す（AIでの画像生成は行わない）。"""
-        positive_dir = os.path.join(TEMPLATES_DIR, "positive")
-        negative_dir = os.path.join(TEMPLATES_DIR, "negative")
+    def pick_cover_image(self) -> str:
+        """当日の投稿に添える表紙用のタロットカード画像を1枚ランダムに選ぶ。"""
         try:
-            path_positive = self._pick_random_template(positive_dir)
-            path_negative = self._pick_random_template(negative_dir)
-            return path_positive, path_negative
-        except Exception as exc:
-            logger.exception("画像テンプレートの選定中にエラーが発生しました")
-            raise GeneratorError(str(exc)) from exc
-
-    def pick_result_image(self, mood: str) -> str:
-        """最終診断1件に添える1枚のタロットカード画像を選ぶ(mood: "positive"/"negative")。"""
-        try:
+            mood = random.choice(("positive", "negative"))
             return self._pick_random_template(os.path.join(TEMPLATES_DIR, mood))
         except Exception as exc:
-            logger.exception("最終診断用の画像選定中にエラーが発生しました")
+            logger.exception("表紙画像の選定中にエラーが発生しました")
             raise GeneratorError(str(exc)) from exc
+
+    def pick_three_cards(self) -> list[tuple[str, str]]:
+        """タロットカード3枚を、大アルカナ22枚（positive/negative問わず）から
+        重複なくランダムに選ぶ。戻り値は (画像パス, 日本語表示名) のリスト。"""
+        try:
+            all_paths = []
+            for mood in ("positive", "negative"):
+                directory = os.path.join(TEMPLATES_DIR, mood)
+                if not os.path.isdir(directory):
+                    continue
+                all_paths.extend(
+                    os.path.join(directory, name)
+                    for name in os.listdir(directory)
+                    if name.lower().endswith((".png", ".jpg", ".jpeg"))
+                )
+            if len(all_paths) < 3:
+                raise GeneratorError(f"タロットカード素材が3枚未満しかありません: {len(all_paths)}枚")
+            chosen = random.sample(all_paths, 3)
+            return [(path, self._display_name_from_path(path)) for path in chosen]
+        except Exception as exc:
+            logger.exception("タロットカード3枚の選定中にエラーが発生しました")
+            raise GeneratorError(str(exc)) from exc
+
+    @staticmethod
+    def _display_name_from_path(path: str) -> str:
+        slug = os.path.splitext(os.path.basename(path))[0]
+        return CARD_DISPLAY_NAMES.get(slug, slug)
 
     @staticmethod
     def _pick_random_template(directory: str) -> str:
