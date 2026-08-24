@@ -35,6 +35,15 @@ jobs:
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
         run: python -c "from main import run_reply_check_job; run_reply_check_job()"
 
+      - name: Upload generated reading images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reply-reading-images
+          path: ai_fortune_system/output/*.png
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Commit updated state
         working-directory: ai_fortune_system
         run: |

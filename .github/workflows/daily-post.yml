@@ -56,6 +56,15 @@ jobs:
           AUTO_POST_TO_X: 'false'
         run: python -c "from main import run_daily_fortune_job; run_daily_fortune_job()"
 
+      - name: Upload generated image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-invitation-image
+          path: ai_fortune_system/output/*.png
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Commit updated state
         working-directory: ai_fortune_system
         run: |

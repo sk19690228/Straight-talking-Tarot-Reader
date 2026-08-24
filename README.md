@@ -68,7 +68,9 @@ GitHubのリポジトリで `Settings → Secrets and variables → Actions → 
 - **`.github/workflows/daily-post.yml`**: **自動スケジュール実行は停止しています**
   （`Actions`タブから手動実行のみ）。本日のお悩みテーマ＋入力案内の投稿文と、
   添える表紙画像を1枚生成します（`AUTO_POST_TO_X=false`固定のため、Xへの自動投稿は
-  しません。投稿文・画像は実行ログと`state/daily_fortune.json`から確認できます）。
+  しません。投稿文・画像は実行ログと`state/daily_fortune.json`から確認できるほか、
+  実行結果画面（Summary）の「Artifacts」から`daily-invitation-image`として画像PNGを
+  直接ダウンロードできます）。
   ⚠️ このワークフローを実行すると、`state/`内の前回分のデータ（tweet_id・
   お悩みテーマ）が新しい日付のもので上書きされます。**前日の投稿へのリプライが
   まだ来る可能性がある間は実行しないでください**（自動応答できなくなります）。
@@ -102,9 +104,15 @@ GitHubのリポジトリで `Settings → Secrets and variables → Actions → 
 状態（本日のテーマ・投稿文・表紙画像、直近1件分の個別鑑定結果）は
 `ai_fortune_system/state/`配下のJSONファイルとしてリポジトリに自動コミットされ、
 実行のたびに引き継がれます。画像はbase64化して状態ファイルに含めるため、GitHub
-ActionsのArtifacts（有効期限あり・ダウンロードにブラウザ操作が必要）を経由しなくても、
-コミット済みのこの状態ファイルから直接画像を取り出せます（`last_reading.json`は
-リポジトリの肥大化を避けるため、直近1件分のみを保持します）。
+ActionsのArtifactsを経由しなくても、コミット済みのこの状態ファイルから直接画像を
+取り出せます（`last_reading.json`はリポジトリの肥大化を避けるため、直近1件分のみを
+保持します）。
+
+これとは別に、各ワークフロー実行では生成した画像PNGをGitHub Actionsの
+Artifactsとしても添付しています（`daily-post`→`daily-invitation-image`、
+`reply-check`→`reply-reading-images`、保持期間30日）。該当ワークフローの実行結果
+ページ下部の「Artifacts」からZIPでダウンロードできます（リプライがなかった回の
+`reply-check`は画像が生成されないため、Artifactsも空になります）。
 
 画像はAIで毎回生成せず、`assets/templates/positive` `assets/templates/negative`
 配下の静的なタロットカード素材（大アルカナ22枚）からランダムに選ぶだけなので、
