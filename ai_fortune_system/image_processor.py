@@ -441,7 +441,7 @@ def compose_daily_invitation_image(
     output_dir: str,
     font_path: str | None = None,
     font_size: int = 50,
-    small_font_size: int = 36,
+    small_font_size: int = 32,
 ) -> str:
     """タロットカード1枚に、上段(テーマ問いかけ)・下段(入力案内)の文章を重ねた
     投稿画像を作る。
