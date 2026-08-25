@@ -170,9 +170,13 @@ class ReplyResponder:
         # 拾えない。Xの返信UIは現在、本文に@メンションを自動挿入しないため、
         # 本文だけの返信は上記だけでは検知できない。そのため、当日の投稿の
         # conversation_id配下の返信を直接検索して補完する。
+        # ※投稿アカウント自身が動作確認のためにリプライするケース(自己リプライ)も
+        # 拾えるよう、投稿者での除外はしない。bot自身の自動返信はmentionへの
+        # リプライであり当日の投稿への直接リプライにはならないため、下の
+        # daily_state["tweet_id"]チェックで自然に除外される。
         try:
             conversation = self._client.search_recent_tweets(
-                query=f"conversation_id:{daily_state['tweet_id']} -from:{me.username}",
+                query=f"conversation_id:{daily_state['tweet_id']}",
                 since_id=since_id,
                 tweet_fields=["referenced_tweets", "author_id"],
                 expansions=["author_id"],
