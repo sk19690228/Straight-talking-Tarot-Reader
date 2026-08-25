@@ -201,17 +201,17 @@ class ReplyResponder:
         latest_processed_id = since_id
 
         for mention in mention_list:
-            latest_processed_id = mention.id
-
             referenced = mention.referenced_tweets or []
             replied_to_ids = {str(ref.id) for ref in referenced if ref.type == "replied_to"}
             if str(daily_state["tweet_id"]) not in replied_to_ids:
                 # 当日の投稿への直接リプライのみを鑑定対象にする
                 # （bot自身の返信へのさらなる返信などは対象外）。
+                latest_processed_id = mention.id
                 continue
 
             user_message = (mention.text or "").strip()
             if not user_message:
+                latest_processed_id = mention.id
                 continue
 
             username = users_by_id[mention.author_id].username if mention.author_id in users_by_id else "あなた"
@@ -231,11 +231,16 @@ class ReplyResponder:
 
                 self._post_reply(mention.id, reply_text, image_bytes)
                 _save_last_reading(mention.id, username, user_message, card_names, reading_text, image_bytes)
+                latest_processed_id = mention.id
                 logger.info("個別鑑定の自動返信に成功しました: mention_id=%s", mention.id)
             except (GeneratorError, ImageProcessorError):
+                # since_idを進めないことで、次回実行時にこのリプライを再試行する。
                 logger.exception("個別鑑定の生成に失敗しました: mention_id=%s", mention.id)
+                break
             except Exception:
+                # since_idを進めないことで、次回実行時にこのリプライを再試行する。
                 logger.exception("個別鑑定の自動返信に失敗しました: mention_id=%s", mention.id)
+                break
 
         if latest_processed_id:
             _save_since_id(latest_processed_id)
