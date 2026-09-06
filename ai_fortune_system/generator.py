@@ -1,4 +1,4 @@
-"""コンテンツ生成モジュール — 辛口タロット占いの文章・画像素材の選定を担当する。
+"""コンテンツ生成モジュール — トートタロット占いの文章・画像素材の選定を担当する。
 
 OpenAI APIには依存しない構成です。
 - 文章生成: Google Gemini API（無料枠あり）
@@ -6,12 +6,17 @@ OpenAI APIには依存しない構成です。
   （assets/templates/positive, negative。大アルカナ22枚）からランダムに選ぶ・
   組み合わせるだけなので、画像生成コストは一切かかりません。
 
-流れ:
-  1. 当日のお悩みテーマを問いかけ、生年月日・血液型・家族構成の入力を促す投稿を作る
-     （build_daily_invitation_text。Gemini呼び出し不要のテンプレート文）。
-  2. その投稿への返信ごとに、タロットカード3枚をランダムに選び（pick_three_cards）、
-     返信内容（生年月日・血液型・家族構成など自由記述）とテーマを踏まえた
-     個別の辛口鑑定文を1本生成する（generate_personal_reading）。
+現在の主な流れ（responder.pyから利用）:
+  Xに投稿済みのトートタロット動画への返信ごとに、返信文から「カードの数字」を
+  読み取り（extract_card_number）、対応する正式なカード名（CARD_NAME_BY_NUMBER）
+  と、生年月日・血液型・（あれば）悩みを踏まえて、マツコ・デラックス口調の鑑定文を
+  1本生成する（generate_thoth_reading）。悩みが書かれていない場合は、そのカードの
+  意味を踏まえた「今日の運勢」のみを占う。
+
+なお、以下は当初の「日替わりお題への招待投稿＋タロット3枚での辛口鑑定」向けの
+関数で、main.py・publisher.py・register_tweet_id.py側の日次投稿フローで
+引き続き使われている（pick_daily_theme、build_daily_invitation_text、
+generate_personal_reading、pick_three_cards など）。
 """
 
 import json
@@ -71,6 +76,140 @@ CARD_DISPLAY_NAMES = {
     "the_world": "世界",
 }
 
+# トートタロット大アルカナ22枚（0〜21）のカード番号 -> 正式なカード名。
+# Xに投稿されたトートタロット動画を読者が停止した瞬間のカード番号がリプライで
+# 届くため、鑑定文にはここから引いた正式名称のみを使う（Gemini側に名称を
+# 推測させない）。
+CARD_NAME_BY_NUMBER: dict[int, str] = {
+    0: "虹の螺旋を舞う愚者",
+    1: "水銀光の魔術師",
+    2: "月光のヴェールを纏う女司祭",
+    3: "星冠の女帝と花咲く宇宙庭園",
+    4: "牡羊座の皇帝",
+    5: "五重の神殿と三鍵の導師",
+    6: "錬金術の恋人たち",
+    7: "琥珀の天球戦車",
+    8: "均衡を裁く調整の剣",
+    9: "闇を進む隠者の灯火",
+    10: "星々を巡る運命の輪",
+    11: "星火の聖杯を掲げる獅子の女王",
+    12: "海中に浮かぶ逆さの賢者",
+    13: "蠍座と不死鳥の再生舞踏",
+    14: "錬金術師の調和",
+    15: "結晶山に坐す角獣",
+    16: "天光に咲く塔",
+    17: "銀水を注ぐ星の女神",
+    18: "月夜の境界、二つの塔",
+    19: "ひまわりの庭で舞う光の精霊",
+    20: "永劫の星卵と未来の子",
+    21: "宇宙の輪舞",
+}
+
+_ROMAN_NUMERALS = [
+    "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+    "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX", "XXI",
+]
+_ROMAN_TO_INDEX = {roman: i + 1 for i, roman in enumerate(_ROMAN_NUMERALS)}
+
+_DATE_RE = re.compile(r"(?:19|20)\d{2}\s*[年/.\-]\s*\d{1,2}\s*[月/.\-]\s*\d{1,2}\s*日?")
+_BLOOD_TYPE_RE = re.compile(r"(AB|[ABO])\s*型", re.IGNORECASE)
+_CARD_LABEL_RE = re.compile(
+    r"(?:カード(?:番号|の数字)?|card)\s*[:：#No.]*\s*([0-9]{1,2}|[IVXivx]{1,5})",
+    re.IGNORECASE,
+)
+_STANDALONE_ROMAN_RE = re.compile(r"(?<![A-Za-z])([IVXivx]{1,5})(?![A-Za-z])")
+_CARD_COUNTER_RE = re.compile(r"(?<!\d)([0-9]{1,2})\s*番")
+_STANDALONE_NUMBER_RE = re.compile(r"(?<!\S)([0-9]{1,2})(?!\S)")
+
+
+def _normalize_card_token(token: str) -> int | None:
+    token = token.strip()
+    if token.isdigit():
+        value = int(token)
+        return value if 0 <= value <= 21 else None
+    return _ROMAN_TO_INDEX.get(token.upper())
+
+
+def extract_card_number(text: str) -> int | None:
+    """リプライの自由記述から「カードの数字」（0〜21）を読み取る。
+    「カード番号:3」のような明示的な表記、独立したローマ数字、「3番」のような
+    表記に対応する。生年月日中の数字と誤認しないよう、日付らしき部分は
+    先に取り除いてから探索する。"""
+    m = _CARD_LABEL_RE.search(text)
+    if m:
+        idx = _normalize_card_token(m.group(1))
+        if idx is not None:
+            return idx
+
+    stripped = _DATE_RE.sub(" ", text)
+
+    m = _STANDALONE_ROMAN_RE.search(stripped)
+    if m:
+        idx = _normalize_card_token(m.group(1))
+        if idx is not None:
+            return idx
+
+    m = _CARD_COUNTER_RE.search(stripped)
+    if m:
+        idx = _normalize_card_token(m.group(1))
+        if idx is not None:
+            return idx
+
+    # 血液型（A型など）を取り除いた上で、独立して書かれている数字（前後が空白や
+    # 改行など）を最後の手段として探す。「0」だけが書かれているようなケースに対応する。
+    without_blood_type = _BLOOD_TYPE_RE.sub(" ", stripped)
+    m = _STANDALONE_NUMBER_RE.search(without_blood_type)
+    if m:
+        idx = _normalize_card_token(m.group(1))
+        if idx is not None:
+            return idx
+
+    return None
+
+
+def detect_has_worry(text: str) -> bool:
+    """カード番号・生年月日・血液型として認識できた部分を取り除いた残りに、
+    ある程度まとまった文章が残っていれば「悩みが書かれている」とみなす。"""
+    remaining = _DATE_RE.sub(" ", text)
+    remaining = _BLOOD_TYPE_RE.sub(" ", remaining)
+    remaining = _CARD_LABEL_RE.sub(" ", remaining)
+    remaining = _STANDALONE_ROMAN_RE.sub(" ", remaining)
+    remaining = _CARD_COUNTER_RE.sub(" ", remaining)
+    remaining = re.sub(r"[\s、。・:：\-/]+", "", remaining)
+    return len(remaining) >= 4
+
+
+_WIDE_CHAR_RANGES = (
+    (0x1100, 0x115F),
+    (0x2E80, 0xA4CF),
+    (0xAC00, 0xD7A3),
+    (0xF900, 0xFAFF),
+    (0xFF00, 0xFF60),
+    (0xFFE0, 0xFFE6),
+    (0x20000, 0x3FFFD),
+)
+
+
+def _is_wide_char(ch: str) -> bool:
+    code = ord(ch)
+    return any(lo <= code <= hi for lo, hi in _WIDE_CHAR_RANGES)
+
+
+def weighted_tweet_length(text: str) -> int:
+    """Xの無料投稿の文字数カウント（全角文字は2、半角文字は1）の簡易近似。"""
+    return sum(2 if _is_wide_char(ch) else 1 for ch in text)
+
+
+def fit_to_tweet_limit(text: str, limit: int = 280) -> str:
+    """textがXの無料投稿の文字数制限を超える場合、末尾を切り詰めて収める。"""
+    if weighted_tweet_length(text) <= limit:
+        return text
+    truncated = text
+    while truncated and weighted_tweet_length(f"{truncated}…") > limit:
+        truncated = truncated[:-1]
+    return f"{truncated}…" if truncated else text[: limit // 2]
+
+
 DAILY_INVITATION_TEMPLATE = (
     "【本日のお悩み診断】\n"
     "{theme}\n\n"
@@ -122,6 +261,31 @@ READING_SYSTEM_PROMPT = """あなたはSNSで人気の辛口タロット占い�
 {
   "reading": "リプライ本文（120文字以内。辛口だが読了感のある占い＆アドバイス文。
     絵文字は控えめに0〜2個まで）"
+}
+"""
+
+THOTH_READING_SYSTEM_PROMPT = """あなたは深層心理学とトートタロットに精通した、SNSで超人気の占い師です。
+歯に衣着せぬ毒舌と鋭い洞察で知られるマツコ・デラックスの喋り方（「〜なのよ」「〜じゃない」
+「あら」「〜だからね」といった一人称・語尾・間の取り方）を忠実に再現して鑑定してください。
+
+読者は、Xに投稿されたトートタロット動画を見ていて、自分の意思で停止した瞬間に映っていた
+カードを教えてくれます。そのカードの正式名称は、こちらから伝える名称をそのまま使い、
+別の名前に変えたり省略したりしないでください（鑑定文に必ず1回そのまま含める）。
+
+読者からは「カード番号」「生年月日」「血液型」に加えて、任意で「悩み」が届きます。
+
+- 悩みが具体的に書かれている場合: そのカードの意味・生年月日から見た年齢感・血液型を
+  踏まえて、読者が「これは私のことだ」と思わず共感してしまうような、深層心理学的な
+  視点も交えた辛口のアドバイスを届けてください。人格否定はせず、あくまで愛のある
+  毒舌に徹すること。
+- 悩みが書かれていない場合: 個別の相談には答えず、そのカードの意味を踏まえた
+  「今日の運勢」だけを占ってください。
+
+出力は必ず次の構造を持つJSONオブジェクトのみとします。前後に説明文やコードブロックの
+記号（```など）を一切付けないでください。
+{
+  "reading": "リプライ本文（全角100文字程度に収める。マツコ・デラックス口調で、
+    指定されたカード名を必ず1回そのまま含める。絵文字は控えめに0〜2個まで）"
 }
 """
 
@@ -189,6 +353,34 @@ class ContentGenerator:
         )
         try:
             content = self._call_gemini_json_with_fallback(READING_SYSTEM_PROMPT, user_content)
+            reading = content.get("reading")
+            if not reading:
+                raise GeneratorError("生成結果に'reading'が含まれていません。")
+            return reading
+        except GeneratorError:
+            raise
+        except Exception as exc:
+            logger.exception("鑑定文生成中にエラーが発生しました")
+            raise GeneratorError(str(exc)) from exc
+
+    def generate_thoth_reading(self, card_name: str, user_message: str, has_worry: bool) -> str:
+        """トートタロット動画で読者が停止したカード（正式名称）と、読者からの返信全文
+        （カード番号・生年月日・血液型・任意の悩み）から、マツコ・デラックス口調の
+        鑑定文を1本生成する。悩みが書かれていない場合は今日の運勢のみを占う。"""
+        worry_instruction = (
+            "このメッセージには具体的な悩みが書かれているので、それも踏まえて個別の"
+            "アドバイスをしてください。"
+            if has_worry
+            else "このメッセージには具体的な悩みは書かれていないので、個別の相談には"
+            "答えず、このカードの意味を踏まえた「今日の運勢」だけを占ってください。"
+        )
+        user_content = (
+            f"読者が動画を停止した瞬間のカード（正式名称。必ずこの名称のまま使うこと）: {card_name}\n"
+            f"読者からのメッセージ全文（カード番号・生年月日・血液型・悩みが含まれる）:\n{user_message}\n\n"
+            f"{worry_instruction}"
+        )
+        try:
+            content = self._call_gemini_json_with_fallback(THOTH_READING_SYSTEM_PROMPT, user_content)
             reading = content.get("reading")
             if not reading:
                 raise GeneratorError("生成結果に'reading'が含まれていません。")
