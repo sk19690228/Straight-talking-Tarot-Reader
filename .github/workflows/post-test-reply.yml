@@ -1,0 +1,43 @@
+name: Post Test Reply
+
+on:
+  workflow_dispatch:
+    inputs:
+      tweet_id:
+        description: '返信先のツイートID'
+        required: true
+        type: string
+      text:
+        description: '投稿するリプライ本文（動作確認用）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ai_fortune_system
+        run: pip install -r requirements.txt
+
+      - name: Post reply
+        working-directory: ai_fortune_system
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          TWEET_ID: ${{ inputs.tweet_id }}
+          REPLY_TEXT: ${{ inputs.text }}
+        run: python scripts/post_test_reply.py
