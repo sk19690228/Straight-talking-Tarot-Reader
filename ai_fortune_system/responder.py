@@ -34,7 +34,7 @@ LAST_READING_PATH = os.path.join(STATE_DIR, "last_reading.json")
 
 # 監視・自動返信の対象ポスト（Xに投稿済みのトートタロット動画）のツイートID。
 # 環境変数 TARGET_TWEET_ID で上書き可能。
-TARGET_TWEET_ID = os.getenv("TARGET_TWEET_ID", "2096670540237066566")
+TARGET_TWEET_ID = os.getenv("TARGET_TWEET_ID", "2096687017807778098")
 
 
 class ResponderError(Exception):
