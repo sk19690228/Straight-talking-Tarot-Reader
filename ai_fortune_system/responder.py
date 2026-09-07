@@ -22,10 +22,14 @@ from generator import (
     GeneratorError,
     detect_has_worry,
     extract_card_number,
+    extract_out_of_range_card_number,
     fit_to_tweet_limit,
 )
 
 logger = logging.getLogger(__name__)
+
+# カードの数字らしき数字が書かれていたものの0〜21の範囲外だった場合に送る案内文。
+OUT_OF_RANGE_CARD_NUMBER_MESSAGE = "カード番号は0〜21の数字で答えてちょうだい💋"
 
 STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DAILY_STATE_PATH = os.path.join(STATE_DIR, "daily_fortune.json")
@@ -220,6 +224,23 @@ class ReplyResponder:
 
             card_index = extract_card_number(user_message)
             if card_index is None:
+                out_of_range_number = extract_out_of_range_card_number(user_message)
+                if out_of_range_number is not None:
+                    try:
+                        reply_text = fit_to_tweet_limit(f"@{username} {OUT_OF_RANGE_CARD_NUMBER_MESSAGE}")
+                        self._post_reply(mention.id, reply_text)
+                        latest_processed_id = mention.id
+                        logger.info(
+                            "カード番号が範囲外(%s)だったため案内を返信しました: mention_id=%s",
+                            out_of_range_number,
+                            mention.id,
+                        )
+                    except Exception:
+                        # since_idを進めないことで、次回実行時にこのリプライを再試行する。
+                        logger.exception("範囲外案内の返信に失敗しました: mention_id=%s", mention.id)
+                        break
+                    continue
+
                 logger.warning(
                     "リプライからカードの数字を読み取れなかったためスキップします: mention_id=%s",
                     mention.id,
