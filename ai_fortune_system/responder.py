@@ -227,7 +227,7 @@ class ReplyResponder:
                 out_of_range_number = extract_out_of_range_card_number(user_message)
                 if out_of_range_number is not None:
                     try:
-                        reply_text = fit_to_tweet_limit(f"@{username} {OUT_OF_RANGE_CARD_NUMBER_MESSAGE}")
+                        reply_text = fit_to_tweet_limit(OUT_OF_RANGE_CARD_NUMBER_MESSAGE)
                         self._post_reply(mention.id, reply_text)
                         latest_processed_id = mention.id
                         logger.info(
@@ -253,7 +253,7 @@ class ReplyResponder:
 
             try:
                 reading_text = self._generator.generate_thoth_reading(card_name, user_message, has_worry)
-                reply_text = fit_to_tweet_limit(f"@{username} {reading_text}")
+                reply_text = fit_to_tweet_limit(reading_text)
 
                 self._post_reply(mention.id, reply_text)
                 _save_last_reading(mention.id, username, user_message, [card_name], reading_text)
