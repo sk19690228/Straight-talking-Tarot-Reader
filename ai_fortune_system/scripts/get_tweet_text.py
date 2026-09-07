@@ -21,7 +21,7 @@ def main() -> None:
     )
     response = client.get_tweet(
         tweet_id,
-        tweet_fields=["author_id", "created_at"],
+        tweet_fields=["author_id", "created_at", "referenced_tweets", "conversation_id", "in_reply_to_user_id"],
         expansions=["author_id"],
         user_fields=["username"],
     )
@@ -29,6 +29,9 @@ def main() -> None:
     users = (response.includes or {}).get("users") or []
     author = users[0].username if users else "?"
     print("author:", author)
+    print("conversation_id:", tweet.conversation_id)
+    print("in_reply_to_user_id:", tweet.in_reply_to_user_id)
+    print("referenced_tweets:", tweet.referenced_tweets)
     print("text:")
     print(tweet.text)
 
