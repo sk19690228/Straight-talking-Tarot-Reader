@@ -1,10 +1,11 @@
 """Xの返信監視・個別タロット鑑定の自動返信ロジック。
 
 流れ:
-  当日の投稿（テーマ確認＋生年月日・血液型・家族構成の入力依頼）への直接リプライを
-  検知するたびに、タロットカード3枚をランダムに選んで1枚の画像に合成し、
-  返信内容（生年月日・血液型・家族構成など自由記述）とお悩みテーマを踏まえた
-  個別の辛口鑑定文を生成して、画像付きで返信する。
+  固定のポスト（TARGET_TWEET_ID。Xに投稿済みのトートタロット動画）への直接リプライを
+  検知するたびに、返信文から「カードの数字」を読み取り、対応する正式なカード名と
+  生年月日・血液型・（あれば）悩みを踏まえて、マツコ・デラックス口調の鑑定文を
+  生成し、テキストのみで返信する。悩みが書かれていない場合は、そのカードの意味を
+  踏まえた「今日の運勢」のみを返信する。
 """
 
 import base64
@@ -15,8 +16,14 @@ import tempfile
 
 import tweepy
 
-from generator import ContentGenerator, GeneratorError
-from image_processor import ImageProcessorError, compose_three_card_image
+from generator import (
+    CARD_NAME_BY_NUMBER,
+    ContentGenerator,
+    GeneratorError,
+    detect_has_worry,
+    extract_card_number,
+    fit_to_tweet_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +31,10 @@ STATE_DIR = os.path.join(os.path.dirname(__file__), "state")
 DAILY_STATE_PATH = os.path.join(STATE_DIR, "daily_fortune.json")
 SINCE_ID_PATH = os.path.join(STATE_DIR, "since_id.json")
 LAST_READING_PATH = os.path.join(STATE_DIR, "last_reading.json")
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
+
+# 監視・自動返信の対象ポスト（Xに投稿済みのトートタロット動画）のツイートID。
+# 環境変数 TARGET_TWEET_ID で上書き可能。
+TARGET_TWEET_ID = os.getenv("TARGET_TWEET_ID", "2096687017807778098")
 
 
 class ResponderError(Exception):
@@ -78,11 +88,12 @@ def _save_last_reading(
     user_message: str,
     card_names: list[str],
     reading_text: str,
-    image_bytes: bytes,
+    image_bytes: bytes | None = None,
 ) -> None:
-    """直近1件分の個別鑑定結果（画像込み）を保存する。GitHub Actions Artifactsを
-    経由しなくても、コミット済みのこの状態ファイルから直接画像を取り出せるように
-    するため（リポジトリの肥大化を避けるため、保持するのは直近1件のみ）。"""
+    """直近1件分の個別鑑定結果を保存する（テキストのみの返信のため、通常は画像なし）。
+    GitHub Actions Artifactsを経由しなくても、コミット済みのこの状態ファイルから
+    直接内容を確認できるようにするため（リポジトリの肥大化を避けるため、保持するのは
+    直近1件のみ）。"""
     os.makedirs(STATE_DIR, exist_ok=True)
     data = {
         "reply_tweet_id": reply_tweet_id,
@@ -90,8 +101,9 @@ def _save_last_reading(
         "user_message": user_message,
         "card_names": card_names,
         "reading_text": reading_text,
-        "image_b64": base64.b64encode(image_bytes).decode("ascii"),
     }
+    if image_bytes is not None:
+        data["image_b64"] = base64.b64encode(image_bytes).decode("ascii")
     with open(LAST_READING_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -128,18 +140,8 @@ class ReplyResponder:
         return response.data["id"]
 
     def check_and_respond(self) -> None:
-        """当日の投稿への直接リプライを確認し、タロット3枚＋辛口鑑定文で自動返信する。"""
-        daily_state = _load_json(DAILY_STATE_PATH)
-        if not daily_state:
-            logger.info("本日の鑑定データが未登録のため、リプライ確認をスキップします。")
-            return
-        if not daily_state.get("tweet_id"):
-            logger.info(
-                "本日のツイートIDが未登録のため、リプライ確認をスキップします。"
-                "手動投稿後に register_tweet_id.py でツイートIDを登録してください。"
-            )
-            return
-
+        """TARGET_TWEET_ID（トートタロット動画のポスト）への直接リプライを確認し、
+        カード番号・生年月日・血液型・（あれば）悩みを踏まえた個別鑑定を自動返信する。"""
         since_id = (_load_json(SINCE_ID_PATH) or {}).get("since_id")
 
         try:
@@ -168,15 +170,15 @@ class ReplyResponder:
 
         # get_users_mentions は本文中に「@ユーザー名」が明示的に含まれるツイートしか
         # 拾えない。Xの返信UIは現在、本文に@メンションを自動挿入しないため、
-        # 本文だけの返信は上記だけでは検知できない。そのため、当日の投稿の
+        # 本文だけの返信は上記だけでは検知できない。そのため、対象ポストの
         # conversation_id配下の返信を直接検索して補完する。
         # ※投稿アカウント自身が動作確認のためにリプライするケース(自己リプライ)も
         # 拾えるよう、投稿者での除外はしない。bot自身の自動返信はmentionへの
-        # リプライであり当日の投稿への直接リプライにはならないため、下の
-        # daily_state["tweet_id"]チェックで自然に除外される。
+        # リプライであり対象ポストへの直接リプライにはならないため、下の
+        # TARGET_TWEET_IDチェックで自然に除外される。
         try:
             conversation = self._client.search_recent_tweets(
-                query=f"conversation_id:{daily_state['tweet_id']}",
+                query=f"conversation_id:{TARGET_TWEET_ID}",
                 since_id=since_id,
                 tweet_fields=["referenced_tweets", "author_id"],
                 expansions=["author_id"],
@@ -203,8 +205,8 @@ class ReplyResponder:
         for mention in mention_list:
             referenced = mention.referenced_tweets or []
             replied_to_ids = {str(ref.id) for ref in referenced if ref.type == "replied_to"}
-            if str(daily_state["tweet_id"]) not in replied_to_ids:
-                # 当日の投稿への直接リプライのみを鑑定対象にする
+            if TARGET_TWEET_ID not in replied_to_ids:
+                # 対象ポストへの直接リプライのみを鑑定対象にする
                 # （bot自身の返信へのさらなる返信などは対象外）。
                 latest_processed_id = mention.id
                 continue
@@ -216,24 +218,27 @@ class ReplyResponder:
 
             username = users_by_id[mention.author_id].username if mention.author_id in users_by_id else "あなた"
 
-            try:
-                cards = self._generator.pick_three_cards()
-                card_paths = [path for path, _name in cards]
-                card_names = [name for _path, name in cards]
-                image_path = compose_three_card_image(card_paths, OUTPUT_DIR)
-                reading_text = self._generator.generate_personal_reading(
-                    daily_state["theme"], user_message, card_names
+            card_index = extract_card_number(user_message)
+            if card_index is None:
+                logger.warning(
+                    "リプライからカードの数字を読み取れなかったためスキップします: mention_id=%s",
+                    mention.id,
                 )
-                reply_text = f"@{username} {reading_text}"
+                latest_processed_id = mention.id
+                continue
 
-                with open(image_path, "rb") as f:
-                    image_bytes = f.read()
+            card_name = CARD_NAME_BY_NUMBER[card_index]
+            has_worry = detect_has_worry(user_message)
 
-                self._post_reply(mention.id, reply_text, image_bytes)
-                _save_last_reading(mention.id, username, user_message, card_names, reading_text, image_bytes)
+            try:
+                reading_text = self._generator.generate_thoth_reading(card_name, user_message, has_worry)
+                reply_text = fit_to_tweet_limit(f"@{username} {reading_text}")
+
+                self._post_reply(mention.id, reply_text)
+                _save_last_reading(mention.id, username, user_message, [card_name], reading_text)
                 latest_processed_id = mention.id
                 logger.info("個別鑑定の自動返信に成功しました: mention_id=%s", mention.id)
-            except (GeneratorError, ImageProcessorError):
+            except GeneratorError:
                 # since_idを進めないことで、次回実行時にこのリプライを再試行する。
                 logger.exception("個別鑑定の生成に失敗しました: mention_id=%s", mention.id)
                 break
