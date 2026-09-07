@@ -126,6 +126,11 @@ def _normalize_card_token(token: str) -> int | None:
     token = token.strip()
     if token.isdigit():
         value = int(token)
+        if value == 22:
+            # カードは0〜21の22枚だが、1枚目・2枚目…と1始まりで数える読者が
+            # 「22」（22枚目のつもり）と書いてくることがあるため、最後のカード
+            # （21）として救済する。
+            return 21
         return value if 0 <= value <= 21 else None
     return _ROMAN_TO_INDEX.get(token.upper())
 
@@ -134,14 +139,16 @@ def extract_card_number(text: str) -> int | None:
     """リプライの自由記述から「カードの数字」（0〜21）を読み取る。
     「カード番号:3」のような明示的な表記、独立したローマ数字、「3番」のような
     表記に対応する。生年月日中の数字と誤認しないよう、日付らしき部分は
-    先に取り除いてから探索する。"""
-    m = _CARD_LABEL_RE.search(text)
+    先に取り除いてから探索する（「カード」という語が文中の他の場所に含まれ、
+    その後方に生年月日が続くケースもあるため、ラベル表記の判定も含めて
+    日付除去後のテキストに対して行う）。"""
+    stripped = _DATE_RE.sub(" ", text)
+
+    m = _CARD_LABEL_RE.search(stripped)
     if m:
         idx = _normalize_card_token(m.group(1))
         if idx is not None:
             return idx
-
-    stripped = _DATE_RE.sub(" ", text)
 
     m = _STANDALONE_ROMAN_RE.search(stripped)
     if m:
