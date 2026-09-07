@@ -123,55 +123,65 @@ _STANDALONE_NUMBER_RE = re.compile(r"(?<!\S)([0-9]{1,2})(?!\S)")
 
 
 def _normalize_card_token(token: str) -> int | None:
+    """トークンを0〜21のカード番号に正規化する。範囲外・非対応の表記はNoneを返す。"""
     token = token.strip()
     if token.isdigit():
         value = int(token)
-        if value == 22:
-            # カードは0〜21の22枚だが、1枚目・2枚目…と1始まりで数える読者が
-            # 「22」（22枚目のつもり）と書いてくることがあるため、最後のカード
-            # （21）として救済する。
-            return 21
         return value if 0 <= value <= 21 else None
     return _ROMAN_TO_INDEX.get(token.upper())
 
 
-def extract_card_number(text: str) -> int | None:
-    """リプライの自由記述から「カードの数字」（0〜21）を読み取る。
-    「カード番号:3」のような明示的な表記、独立したローマ数字、「3番」のような
-    表記に対応する。生年月日中の数字と誤認しないよう、日付らしき部分は
-    先に取り除いてから探索する（「カード」という語が文中の他の場所に含まれ、
-    その後方に生年月日が続くケースもあるため、ラベル表記の判定も含めて
-    日付除去後のテキストに対して行う）。"""
+def _find_card_token(text: str) -> str | None:
+    """リプライの自由記述から「カードの数字」らしきトークン（数字文字列や
+    ローマ数字）を1つ探す。範囲チェックは行わない（呼び出し側が正規化・範囲
+    確認する）。「カード番号:3」のような明示的な表記、独立したローマ数字、
+    「3番」のような表記に対応する。生年月日中の数字と誤認しないよう、日付
+    らしき部分は先に取り除いてから探索する（「カード」という語が文中の他の
+    場所に含まれ、その後方に生年月日が続くケースもあるため、ラベル表記の
+    判定も含めて日付除去後のテキストに対して行う）。"""
     stripped = _DATE_RE.sub(" ", text)
 
     m = _CARD_LABEL_RE.search(stripped)
     if m:
-        idx = _normalize_card_token(m.group(1))
-        if idx is not None:
-            return idx
+        return m.group(1)
 
     m = _STANDALONE_ROMAN_RE.search(stripped)
     if m:
-        idx = _normalize_card_token(m.group(1))
-        if idx is not None:
-            return idx
+        return m.group(1)
 
     m = _CARD_COUNTER_RE.search(stripped)
     if m:
-        idx = _normalize_card_token(m.group(1))
-        if idx is not None:
-            return idx
+        return m.group(1)
 
     # 血液型（A型など）を取り除いた上で、独立して書かれている数字（前後が空白や
     # 改行など）を最後の手段として探す。「0」だけが書かれているようなケースに対応する。
     without_blood_type = _BLOOD_TYPE_RE.sub(" ", stripped)
     m = _STANDALONE_NUMBER_RE.search(without_blood_type)
     if m:
-        idx = _normalize_card_token(m.group(1))
-        if idx is not None:
-            return idx
+        return m.group(1)
 
     return None
+
+
+def extract_card_number(text: str) -> int | None:
+    """リプライの自由記述から、0〜21の正しいカード番号を読み取る。範囲外の
+    数字しか見つからない場合や、それらしきトークンが全く無い場合はNoneを返す
+    （両者の区別が必要な場合はextract_out_of_range_card_numberも使うこと）。"""
+    token = _find_card_token(text)
+    if token is None:
+        return None
+    return _normalize_card_token(token)
+
+
+def extract_out_of_range_card_number(text: str) -> int | None:
+    """カードの数字らしき数字（0〜21の範囲外）が書かれていた場合、その数値を
+    返す。範囲内の数字や、数字自体が見つからない場合はNoneを返す。読者に
+    「0〜21で答えて」と案内すべきかどうかの判定に使う。"""
+    token = _find_card_token(text)
+    if token is None or not token.isdigit():
+        return None
+    value = int(token)
+    return None if 0 <= value <= 21 else value
 
 
 def detect_has_worry(text: str) -> bool:
