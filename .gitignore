@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .env
+ai_fortune_system/env
 ai_fortune_system/output/
 ai_fortune_system/.venv/
 .DS_Store
